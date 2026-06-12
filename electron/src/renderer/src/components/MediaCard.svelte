@@ -6,16 +6,19 @@
   import { Button } from "$lib/components/ui/button";
   import { Badge } from "$lib/components/ui/badge/index.js";
   import * as ButtonGroup from "$lib/components/ui/button-group/index.js";
+  import { countryName, qualityClass } from "$lib/utils";
 
   let {
     media,
     onclick,
+    quality = null,
     initialExpanded = false,
     onclose,
     onsimilar,
   }: {
     media: Media;
     onclick: (m: Media) => void;
+    quality?: string | null;
     initialExpanded?: boolean;
     onclose?: () => void;
     onsimilar?: (m: Media) => void;
@@ -30,6 +33,7 @@
   let keywords = $state<string[]>([]);
   let hoverCardStyle = $state("");
   let similar = $state<Media[]>([]);
+  let originCountry: string[] = $state([]);
 
   let genres = $state<string[]>([]);
   let runtime = $state<string>("");
@@ -154,6 +158,7 @@
           )
             ?.slice(0, 4)
             .map((k: { name: string }) => k.name) ?? [];
+        originCountry = d.origin_country ?? [];
       });
   }
 
@@ -253,11 +258,22 @@
   onkeydown={(e) => e.key === "Enter" && !expanded && onclick(media)}
 >
   {#if !initialExpanded}
-    <img
-      src={media.poster_path}
-      alt={title}
-      class="block aspect-2/3 w-full rounded-md object-cover"
-    />
+    <div class="relative">
+      <img
+        src={media.poster_path}
+        alt={title}
+        class="block aspect-2/3 w-full rounded-md object-cover"
+      />
+      {#if quality}
+        <span
+          class="absolute bottom-1.5 left-1.5 rounded border px-1.5 py-0.5 text-xs font-medium {qualityClass(
+            quality,
+          )}"
+        >
+          {quality.toUpperCase()}
+        </span>
+      {/if}
+    </div>
   {/if}
 
   {#if hovered || expanded}
@@ -319,8 +335,24 @@
                 {ageRating}
               </span>
             {/if}
+            {#if originCountry.length}
+              <span class="rounded border border-border px-1.5 py-0.5 text-xs">
+                {originCountry.map((code) => countryName(code)).join(", ")}
+              </span>
+            {/if}
             {#if runtime}
-              <span class="text-xs text-muted-foreground">{runtime}</span>
+              <span class="rounded border border-border px-1.5 py-0.5 text-xs">
+                {runtime}
+              </span>
+            {/if}
+            {#if quality}
+              <span
+                class="rounded border px-1.5 py-0.5 text-xs font-medium {qualityClass(
+                  quality,
+                )}"
+              >
+                {quality.toUpperCase()}
+              </span>
             {/if}
           </span>
 

@@ -22,7 +22,7 @@
 </script>
 
 <div
-  class="fixed z-50 flex h-12 w-full items-center justify-between px-4 select-none [webkit-app-region:drag]"
+  class="fixed z-50 flex h-12 w-full items-center justify-between px-6 pt-6 select-none [webkit-app-region:drag]"
 >
   <div class="flex items-center gap-2">
     <span class="text-2xl font-bold tracking-wider text-orange-400">COVE</span>

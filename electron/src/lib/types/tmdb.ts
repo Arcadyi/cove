@@ -15,6 +15,7 @@ export interface Media {
   media_type: string;
   trailer_url: string;
   images: string[];
+  popularity: number /* float64 */;
 }
 export interface MediaDetails {
   imdb_id: string;
@@ -52,4 +53,9 @@ export interface Details {
       name: string;
     }[]; // tv shows
   };
+  origin_country: string[];
+}
+export interface Keyword {
+  id: number /* int */;
+  name: string;
 }
