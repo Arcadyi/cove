@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain } from "electron";
+import { app, BrowserWindow, ipcMain, shell } from "electron";
 import { join } from "path";
 import { spawn, ChildProcess } from "child_process";
 import { is } from "@electron-toolkit/utils";
@@ -33,6 +33,11 @@ function createWindow(): void {
       sandbox: false,
       autoplayPolicy: "no-user-gesture-required",
     },
+  });
+
+  mainWindow.webContents.setWindowOpenHandler((details) => {
+    shell.openExternal(details.url);
+    return { action: "deny" };
   });
 
   ipcMain.on("window-minimize", () => {

@@ -127,7 +127,7 @@
 
   const trailerUrl = $derived(
     trailer
-      ? `${trailer}?autoplay=1&controls=0&modestbranding=1&loop=1&rel=0&iv_load_policy=3&disablekb=1`
+      ? `${trailer}?autoplay=1&controls=1&modestbranding=1&loop=1&rel=0&iv_load_policy=3&disablekb=0`
       : null,
   );
 </script>
