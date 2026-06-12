@@ -11,7 +11,6 @@ import (
 
 	"github.com/Arcadyi/cove/internal/addons"
 	"github.com/Arcadyi/cove/internal/player"
-	"github.com/Arcadyi/cove/internal/subtitles"
 	"github.com/Arcadyi/cove/internal/tmdb"
 	"github.com/joho/godotenv"
 )
@@ -266,43 +265,6 @@ func main() {
 		if err != nil {
 			log.Println(err)
 		}
-	}))
-
-	// get subtitle list for a movie/show
-	http.HandleFunc("/api/subtitles", corsMiddleware(func(w http.ResponseWriter, r *http.Request) {
-		imdbID := r.URL.Query().Get("imdb_id")
-		if imdbID == "" {
-			http.Error(w, "missing imdb_id", http.StatusBadRequest)
-			return
-		}
-		subsApiKey := os.Getenv("OPENSUBTITLES_API_KEY")
-		results, err := subtitles.Search(imdbID, subsApiKey)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		json.NewEncoder(w).Encode(results)
-	}))
-
-	// proxy the actual subtitle file download
-	// main.go
-
-	http.HandleFunc("/api/subtitles/download", corsMiddleware(func(w http.ResponseWriter, r *http.Request) {
-		fileID := r.URL.Query().Get("file_id")
-		subsApiKey := os.Getenv("OPENSUBTITLES_API_KEY")
-
-		data, err := subtitles.Download(fileID, subsApiKey)
-		if err != nil {
-			log.Printf("Download failed: %v", err)
-			// Return a standard JSON error, NOT text/vtt
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusServiceUnavailable)
-			json.NewEncoder(w).Encode(map[string]string{"error": "Subtitle service temporarily unavailable"})
-			return
-		}
-
-		w.Header().Set("Content-Type", "text/vtt; charset=utf-8")
-		w.Write(subtitles.SrtToVtt(data))
 	}))
 
 	http.HandleFunc("/api/imdb", corsMiddleware(func(w http.ResponseWriter, r *http.Request) {

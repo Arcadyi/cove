@@ -13,7 +13,6 @@
   import { Button } from "$lib/components/ui/button";
   import * as Tooltip from "$lib/components/ui/tooltip";
   import * as Popover from "$lib/components/ui/popover";
-  import { Captions } from "lucide-svelte";
   import type { Media } from "$lib/types/tmdb";
 
   let { src, media, imdbId }: { src: string; media?: Media; imdbId?: string } =
@@ -51,59 +50,13 @@
   let peers = $state(0);
   let speed = $state("0 B/s");
 
-  let subtitles = $state<{ language: string; url: string; name: string }[]>([]);
-  let previousBlobUrl: string | null = null;
-  let subtitleBlobUrl = $state<string>("");
-  let activeSubtitle = $state<string | null>(null);
-  let subtitleContent = $state<string>("WEBVTT\n\n");
-
-  $effect(() => {
-    if (previousBlobUrl) {
-      URL.revokeObjectURL(previousBlobUrl);
-    }
-    console.log("Generating Blob. Content length:", subtitleContent.length);
-    const blob = new Blob([subtitleContent], { type: "text/vtt" });
-    const url = URL.createObjectURL(blob);
-    previousBlobUrl = url;
-    subtitleBlobUrl = url;
-    console.log("New Blob URL generated:", url);
-  });
-
   $effect(() => {
     if (!imdbId) return;
-    console.log("Fetching subtitle list for IMDB ID:", imdbId);
     fetch(`http://localhost:6969/api/subtitles?imdb_id=${imdbId}`)
       .then((r) => r.json())
-      .then((d) => {
-        console.log("Subtitles API response:", d);
-        subtitles = d ?? [];
-      })
+      .then(() => {})
       .catch((e) => console.error("Subtitles API error:", e));
   });
-
-  async function selectSubtitle(url: string | null): Promise<void> {
-    if (!url) {
-      activeSubtitle = null;
-      subtitleContent = "WEBVTT\n\n";
-      return;
-    }
-
-    try {
-      const res = await fetch(`http://localhost:6969${url}`);
-
-      if (!res.ok) {
-        console.error("Subtitle download failed with status:", res.status);
-        // Optional: Add a UI notification here
-        return;
-      }
-
-      const text = await res.text();
-      subtitleContent = text;
-      activeSubtitle = url;
-    } catch (e) {
-      console.error("Network error during subtitle fetch:", e);
-    }
-  }
 
   // For HTTP streams, simulate a fake loading progress so the bar animates
   let fakeProgress = $state(0);
@@ -253,29 +206,7 @@
       canPlay = true;
     }}
   >
-    <track
-      kind="captions"
-      src={subtitleBlobUrl}
-      srclang="en"
-      label="English"
-      default
-      onload={(e) => {
-        console.log("Track fired onload event", e);
-        const trackElement = e.target as HTMLTrackElement;
-        trackElement.track.mode = "showing";
-
-        if (videoEl && videoEl.textTracks) {
-          console.log("Total text tracks found:", videoEl.textTracks.length);
-          for (let i = 0; i < videoEl.textTracks.length; i++) {
-            videoEl.textTracks[i].mode = "showing";
-            console.log(`Track ${i} cues length:`, videoEl.textTracks[i].cues?.length);
-          }
-        }
-      }}
-      onerror={(e) => {
-        console.error("Track fired onerror event! The browser rejected the Blob URL.", e);
-      }}
-    />
+    <track kind="captions" src="" />
   </video>
 
   <!-- Loading screen -->
@@ -484,42 +415,6 @@
               {#if peers > 0}<span>{peers} peers</span>{/if}
             </div>
             <div class="mt-1 text-xs text-muted-foreground">↓ {speed}</div>
-          </Popover.Content>
-        </Popover.Root>
-      {/if}
-
-      {#if subtitles.length}
-        <Popover.Root>
-          <Popover.Trigger
-            class="flex items-center gap-1.5 rounded-md px-2 py-1 text-white/70 transition-colors hover:bg-white/10 hover:text-white"
-            onclick={(e) => e.stopPropagation()}
-          >
-            <Captions class="size-4" />
-          </Popover.Trigger>
-          <Popover.Content class="w-56" side="top">
-            <p class="mb-2 text-sm font-medium">Subtitles</p>
-            <div class="flex flex-col gap-1">
-              <Popover.Close
-                class="rounded px-2 py-1 text-left text-xs transition-colors hover:bg-secondary {activeSubtitle ===
-                null
-                  ? 'bg-secondary font-medium'
-                  : ''}"
-                onclick={() => selectSubtitle(null)}
-              >
-                Off
-              </Popover.Close>
-              {#each subtitles as sub (sub)}
-                <Popover.Close
-                  class="rounded px-2 py-1 text-left text-xs transition-colors hover:bg-secondary {activeSubtitle ===
-                  sub.url
-                    ? 'bg-secondary font-medium'
-                    : ''}"
-                  onclick={() => selectSubtitle(sub.url)}
-                >
-                  {sub.language} — {sub.name.slice(0, 30)}
-                </Popover.Close>
-              {/each}
-            </div>
           </Popover.Content>
         </Popover.Root>
       {/if}
