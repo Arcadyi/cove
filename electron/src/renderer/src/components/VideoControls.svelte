@@ -12,12 +12,14 @@
     ChevronLeft,
     ChevronRight,
     PictureInPicture2,
+    Settings,
   } from "lucide-svelte";
   import { Button } from "$lib/components/ui/button";
   import * as Tooltip from "$lib/components/ui/tooltip";
   import * as Popover from "$lib/components/ui/popover";
   import { SvelteMap } from "svelte/reactivity";
   import { ScrollArea } from "$lib/components/ui/scroll-area";
+  import type { SubtitleSettings } from "./Player.svelte"; // or inline the type
 
   let {
     playing,
@@ -45,6 +47,7 @@
     onSetPlaybackRate,
     pipSupported,
     onTogglePip,
+    subtitleSettings = $bindable<SubtitleSettings>(),
   }: {
     playing: boolean;
     currentTime: number;
@@ -71,6 +74,7 @@
     onSetPlaybackRate: (rate: number) => void;
     pipSupported: boolean;
     onTogglePip: () => Promise<void>;
+    subtitleSettings: SubtitleSettings;
   } = $props();
 
   function formatTime(s: number): string {
@@ -95,6 +99,9 @@
 
   let subtitleOpen = $state(false);
   let selectedLang = $state<string | null>(null);
+
+  type SubtitleView = "languages" | "tracks" | "settings";
+  let subtitleView = $state<SubtitleView>("languages");
 
   function langName(code: string): string {
     try {
@@ -326,11 +333,150 @@
           />
         </Popover.Trigger>
 
-        <Popover.Content side="top" class="w-48 p-1">
-          <ScrollArea class="h-64">
-            <div class="p-1">
-              {#if selectedLang === null}
-                <!-- Level 1: language list -->
+        <Popover.Content side="top" class="w-52 p-0">
+          <!-- Header -->
+          <div
+            class="flex items-center justify-between border-b border-border px-3 py-2"
+          >
+            <span class="text-xs font-medium text-muted-foreground">
+              {subtitleView === "settings"
+                ? "Subtitle Settings"
+                : subtitleView === "tracks"
+                  ? langName(selectedLang ?? "")
+                  : "Subtitles"}
+            </span>
+            <button
+              onclick={(e) => {
+                e.stopPropagation();
+                subtitleView =
+                  subtitleView === "settings" ? "languages" : "settings";
+              }}
+              class="rounded p-0.5 transition-colors hover:bg-secondary {subtitleView ===
+              'settings'
+                ? 'text-foreground'
+                : 'text-muted-foreground'}"
+            >
+              <Settings class="size-3.5" />
+            </button>
+          </div>
+
+          {#if subtitleView === "settings"}
+            <!-- Settings panel -->
+            <div class="space-y-4 p-3">
+              <!-- Font size -->
+              <div class="space-y-1.5">
+                <div class="flex justify-between text-xs">
+                  <span class="text-muted-foreground">Font size</span>
+                  <span>{subtitleSettings.size}%</span>
+                </div>
+                <input
+                  type="range"
+                  min="50"
+                  max="200"
+                  step="10"
+                  bind:value={subtitleSettings.size}
+                  onclick={(e) => e.stopPropagation()}
+                  class="w-full accent-white"
+                />
+              </div>
+
+              <!-- Vertical position -->
+              <div class="space-y-1.5">
+                <div class="flex justify-between text-xs">
+                  <span class="text-muted-foreground">Position</span>
+                  <span>{subtitleSettings.line}%</span>
+                </div>
+                <input
+                  type="range"
+                  min="5"
+                  max="95"
+                  step="5"
+                  bind:value={subtitleSettings.line}
+                  onclick={(e) => e.stopPropagation()}
+                  class="w-full accent-white"
+                />
+              </div>
+
+              <!-- Background toggle -->
+              <div class="flex items-center justify-between text-xs">
+                <span class="text-muted-foreground">Background</span>
+                <button
+                  onclick={(e) => {
+                    e.stopPropagation();
+                    subtitleSettings.background = !subtitleSettings.background;
+                  }}
+                  class="h-5 w-9 rounded-full transition-colors {subtitleSettings.background
+                    ? 'bg-white'
+                    : 'bg-white/20'}"
+                  aria-label="background_toggle"
+                >
+                  <span
+                    class="block size-4 translate-x-0.5 rounded-full bg-black transition-transform {subtitleSettings.background
+                      ? 'translate-x-4'
+                      : ''}"
+                  ></span>
+                </button>
+              </div>
+
+              <!-- Time offset -->
+              <div class="space-y-1.5">
+                <div class="flex justify-between text-xs">
+                  <span class="text-muted-foreground">Time offset</span>
+                  <span
+                    class={subtitleSettings.offset !== 0
+                      ? "text-yellow-400"
+                      : ""}
+                    >{subtitleSettings.offset > 0
+                      ? "+"
+                      : ""}{subtitleSettings.offset.toFixed(1)}s</span
+                  >
+                </div>
+                <div class="flex items-center gap-2">
+                  <button
+                    onclick={(e) => {
+                      e.stopPropagation();
+                      subtitleSettings.offset = Math.max(
+                        -30,
+                        +(subtitleSettings.offset - 0.5).toFixed(1),
+                      );
+                    }}
+                    class="flex h-6 w-6 items-center justify-center rounded bg-secondary text-sm hover:bg-secondary/80"
+                    >−</button
+                  >
+                  <div class="h-1 flex-1 rounded-full bg-white/20">
+                    <div
+                      class="h-full rounded-full bg-yellow-400 transition-all"
+                      style="width: {((subtitleSettings.offset + 30) / 60) *
+                        100}%"
+                    ></div>
+                  </div>
+                  <button
+                    onclick={(e) => {
+                      e.stopPropagation();
+                      subtitleSettings.offset = Math.min(
+                        30,
+                        +(subtitleSettings.offset + 0.5).toFixed(1),
+                      );
+                    }}
+                    class="flex h-6 w-6 items-center justify-center rounded bg-secondary text-sm hover:bg-secondary/80"
+                    >+</button
+                  >
+                </div>
+                {#if subtitleSettings.offset !== 0}
+                  <button
+                    onclick={(e) => {
+                      e.stopPropagation();
+                      subtitleSettings.offset = 0;
+                    }}
+                    class="w-full rounded py-0.5 text-center text-xs text-muted-foreground transition-colors hover:text-foreground"
+                    >Reset</button
+                  >
+                {/if}
+              </div>
+            </div>
+          {:else if subtitleView === "languages"}
+            <ScrollArea class="h-64">
+              <div class="p-1">
                 <button
                   onclick={() => {
                     activeSubtitle = "-1";
@@ -339,10 +485,8 @@
                   class="flex w-full items-center rounded px-3 py-1.5 text-left text-sm transition-colors hover:bg-secondary {activeSubtitle ===
                   '-1'
                     ? 'font-semibold'
-                    : ''}"
+                    : ''}">Off</button
                 >
-                  Off
-                </button>
                 {#each [...tracksByLang] as [lang, tracks] (lang)}
                   <button
                     onclick={(e) => {
@@ -352,6 +496,7 @@
                         subtitleOpen = false;
                       } else {
                         selectedLang = lang;
+                        subtitleView = "tracks";
                       }
                     }}
                     class="flex w-full items-center justify-between rounded px-3 py-1.5 text-left text-sm transition-colors hover:bg-secondary {tracks.some(
@@ -365,26 +510,28 @@
                       <span
                         class="flex items-center gap-1 text-xs text-muted-foreground"
                       >
-                        {tracks.length}
-                        <ChevronRight class="size-3.5" />
+                        {tracks.length}<ChevronRight class="size-3.5" />
                       </span>
                     {/if}
                   </button>
                 {/each}
-              {:else}
-                <!-- Level 2: tracks for selected language -->
+              </div>
+            </ScrollArea>
+          {:else if subtitleView === "tracks"}
+            <ScrollArea class="h-64">
+              <div class="p-1">
                 <button
                   onclick={(e) => {
                     e.stopPropagation();
+                    subtitleView = "languages";
                     selectedLang = null;
                   }}
                   class="flex w-full items-center gap-1.5 rounded px-3 py-1.5 text-left text-sm text-muted-foreground transition-colors hover:bg-secondary"
                 >
-                  <ChevronLeft class="size-3.5" />
-                  {langName(selectedLang)}
+                  <ChevronLeft class="size-3.5" />{langName(selectedLang ?? "")}
                 </button>
                 <div class="my-1 h-px bg-border"></div>
-                {#each tracksByLang.get(selectedLang) ?? [] as { index }, i (index)}
+                {#each tracksByLang.get(selectedLang ?? "") ?? [] as { index }, i (index)}
                   <button
                     onclick={(e) => {
                       e.stopPropagation();
@@ -394,14 +541,12 @@
                     class="flex w-full items-center rounded px-3 py-1.5 text-left text-sm transition-colors hover:bg-secondary {activeSubtitle ===
                     index.toString()
                       ? 'font-semibold'
-                      : ''}"
+                      : ''}">Track {i + 1}</button
                   >
-                    Track {i + 1}
-                  </button>
                 {/each}
-              {/if}
-            </div>
-          </ScrollArea>
+              </div>
+            </ScrollArea>
+          {/if}
         </Popover.Content>
       </Popover.Root>
     {/if}

@@ -20,6 +20,51 @@
       : `http://localhost:6969/api/play?url=${encodeURIComponent(src)}`,
   );
 
+  export type SubtitleSettings = {
+    size: number; // 50–200, font size %
+    line: number; // 5–95, vertical position % from top
+    background: boolean;
+    offset: number; // seconds, can be negative
+  };
+  let subtitleSettings = $state<SubtitleSettings>({
+    size: 100,
+    line: 85,
+    background: true,
+    offset: 0,
+  });
+
+  $effect(() => {
+    const el = document.createElement("style");
+    el.textContent = `::cue {
+    font-size: ${subtitleSettings.size}%;
+    background-color: ${subtitleSettings.background ? "rgba(0,0,0,0.75)" : "transparent"};
+  }`;
+    document.head.appendChild(el);
+    return () => el.remove();
+  });
+
+  const cueOriginalTimes = new WeakMap<TextTrackCue, { start: number; end: number }>();
+  function applySubtitleAdjustments(track: TextTrack): void {
+    const run = (): void => {
+      if (!track.cues) return;
+      Array.from(track.cues).forEach((cue) => {
+        const v = cue as VTTCue;
+        // Position
+        v.snapToLines = false;
+        v.line = subtitleSettings.line;
+        // Time offset — store originals first
+        if (!cueOriginalTimes.has(cue)) {
+          cueOriginalTimes.set(cue, { start: v.startTime, end: v.endTime });
+        }
+        const orig = cueOriginalTimes.get(cue)!;
+        v.startTime = Math.max(0, orig.start + subtitleSettings.offset);
+        v.endTime   = Math.max(0, orig.end   + subtitleSettings.offset);
+      });
+    };
+    run();
+    setTimeout(run, 600); // cues load async from proxy
+  }
+
   const title = $derived(
     media ? (media.media_type === "tv" ? media.name : media.title) : "",
   );
@@ -81,26 +126,13 @@
     };
   });
 
-  function adjustCuePositions(track: TextTrack): void {
-    const apply = (): void => {
-      if (!track.cues) return;
-      Array.from(track.cues).forEach((cue) => {
-        const v = cue as VTTCue;
-        v.snapToLines = false;
-        v.line = 85; // 85% from top, clearing the controls bar
-      });
-    };
-    apply();
-    // Cues load asynchronously from the proxy, run again after they arrive
-    setTimeout(apply, 500);
-  }
-
   $effect(() => {
     if (!videoEl) return;
     const idx = Number(activeSubtitle);
+    const { line, offset } = subtitleSettings;
     subtitleTracks.forEach((track, i) => {
       track.mode = i === idx ? "showing" : "disabled";
-      if (i === idx) adjustCuePositions(track);
+      if (i === idx) applySubtitleAdjustments(track);
     });
   });
 
@@ -436,6 +468,7 @@
     onResetControlsTimer={resetControlsTimer}
     {subtitleTracks}
     bind:activeSubtitle
+    bind:subtitleSettings
     {playbackRate}
     onSetPlaybackRate={setPlaybackRate}
     {pipSupported}
