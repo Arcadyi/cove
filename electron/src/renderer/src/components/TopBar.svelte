@@ -57,7 +57,7 @@
     </div>
     <div
       bind:this={searchOuter}
-      class="relative flex h-9 items-center rounded-full border bg-background"
+      class="relative flex h-9 items-center rounded-full border bg-transparent"
       class:w-9={searchState === "hidden"}
       class:w-[300px]={searchState === "active"}
       role="search"
