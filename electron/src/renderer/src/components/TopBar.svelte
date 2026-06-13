@@ -1,10 +1,10 @@
 <script lang="ts">
-  import { Minus, Square, X, Search } from "lucide-svelte";
+  import { Minus, Square, X, Search, House, CirclePlus } from "lucide-svelte";
   import { Button } from "$lib/components/ui/button";
   import * as ButtonGroup from "$lib/components/ui/button-group/index.js";
-  import { Input } from "$lib/components/ui/input/index.js";
   import { Spinner } from "$lib/components/ui/spinner/index.js";
-  import DarkModeButton from "./DarkModeButton.svelte";
+  import CoveIcon from "../assets/CoveIcon.svelte";
+  import { animate } from "animejs";
 
   function minimize(): void {
     window.electron.ipcRenderer.send("window-minimize");
@@ -19,38 +19,86 @@
   }
 
   let { query = $bindable(""), loading = $bindable(false) } = $props();
+
+  let searchOuter = $state<HTMLDivElement>();
+  let searchState = $state<"active" | "hidden">("hidden");
+  let searchFocused = $state<boolean>(false);
+
+  async function toggleSearch(show: boolean): Promise<void> {
+    if (show === (searchState === "active")) return;
+    if (query.length > 0 && searchFocused) return;
+
+    animate(searchOuter, {
+      width: show ? 300 : 36,
+      duration: 300,
+      easing: "easeOutExpo",
+      complete: () => {
+        searchState = show ? "active" : "hidden";
+      },
+    });
+  }
 </script>
 
 <div
   class="fixed z-50 flex h-12 w-full items-center justify-between px-6 pt-6 select-none [webkit-app-region:drag]"
 >
   <div class="flex items-center gap-2">
-    <span class="text-2xl font-bold tracking-wider text-orange-400">COVE</span>
+    <span class="text-2xl font-bold tracking-wider text-orange-400">
+      <CoveIcon />
+    </span>
   </div>
 
-  <!-- Ensure this container is non-draggable and interactive -->
-  <div class="flex w-full items-center gap-2 p-5 [webkit-app-region:no-drag]">
-    <div class="relative w-full">
-      {#if loading}
-        <Spinner
-          class="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground"
-        />
-      {:else}
-        <Search
-          class="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground"
-        />
-      {/if}
-      <Input
+  <div class="flex items-center gap-2 p-5 [webkit-app-region:no-drag]">
+    <div class="flex items-center gap-1">
+      <ButtonGroup.Root>
+        <Button variant="outline" size="default"><House /></Button>
+        <Button variant="outline" size="default"><CirclePlus /></Button>
+      </ButtonGroup.Root>
+    </div>
+    <div
+      bind:this={searchOuter}
+      class="relative flex h-9 items-center rounded-full border bg-background"
+      class:w-9={searchState === "hidden"}
+      class:w-[300px]={searchState === "active"}
+      role="search"
+      onmouseenter={() => toggleSearch(true)}
+      onmouseleave={() => toggleSearch(false)}
+    >
+      <div
+        class="pointer-events-none absolute top-1/2 transition-all duration-300"
+        class:left-2.5={searchState === "active"}
+        style:left={searchState === "hidden" ? "50%" : undefined}
+        style:transform={searchState === "hidden"
+          ? "translate(-50%, -50%)"
+          : "translateY(-50%)"}
+      >
+        {#if loading}
+          <Spinner class="size-4" />
+        {:else}
+          <Search class="size-4" />
+        {/if}
+      </div>
+
+      <input
         type="search"
         placeholder="Search..."
-        class="h-8 bg-transparent pl-8"
+        class="h-full w-full border-0 bg-transparent pr-2 pl-8 text-sm outline-none focus:ring-0"
+        class:opacity-0={searchState === "hidden"}
+        class:opacity-100={searchState === "active"}
         bind:value={query}
+        disabled={searchState === "hidden"}
+        onfocus={() => {
+          searchFocused = true;
+        }}
+        onfocusout={() => {
+          searchFocused = false;
+          toggleSearch(false);
+        }}
       />
     </div>
   </div>
 
   <div class="flex items-center gap-1 [webkit-app-region:no-drag]">
-    <DarkModeButton />
     <ButtonGroup.Root>
       <Button variant="outline" size="icon-sm" onclick={minimize}>
         <Minus />
