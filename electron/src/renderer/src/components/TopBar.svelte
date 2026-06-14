@@ -18,7 +18,11 @@
     window.electron.ipcRenderer.send("window-close");
   }
 
-  let { query = $bindable(""), loading = $bindable(false) } = $props();
+  let {
+    query = $bindable(""),
+    loading = $bindable(false),
+    onSelectPage,
+  } = $props();
 
   let searchOuter = $state<HTMLDivElement>();
   let searchState = $state<"active" | "hidden">("hidden");
@@ -37,6 +41,10 @@
       },
     });
   }
+
+  function selectPage(page: string): void {
+    onSelectPage({ type: page });
+  }
 </script>
 
 <div
@@ -51,8 +59,24 @@
   <div class="flex items-center gap-2 p-5 [webkit-app-region:no-drag]">
     <div class="flex items-center gap-1">
       <ButtonGroup.Root>
-        <Button variant="outline" size="default"><House /></Button>
-        <Button variant="outline" size="default"><CirclePlus /></Button>
+        <Button
+          variant="outline"
+          size="default"
+          onclick={() => {
+            selectPage("home");
+          }}
+        >
+          <House />
+        </Button>
+        <Button
+          variant="outline"
+          size="default"
+          onclick={() => {
+            selectPage("myList");
+          }}
+        >
+          <CirclePlus />
+        </Button>
       </ButtonGroup.Root>
     </div>
     <div

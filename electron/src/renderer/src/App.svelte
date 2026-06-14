@@ -8,6 +8,7 @@
   import * as Tooltip from "$lib/components/ui/tooltip";
   import { ScrollArea } from "$lib/components/ui/scroll-area/index.js";
   import { SvelteMap } from "svelte/reactivity";
+  import type { Page } from "$lib/types/types";
 
   let query = $state("");
   let results: Media[] = $state([]);
@@ -17,6 +18,24 @@
   let qualityMap = new SvelteMap<number, string>();
   let loading = $state(false);
   let keywords: { id: number; name: string }[] = $state([]);
+
+  let currentPage = $state<Page>({ type: "home" });
+  let pageHistory = $state<Page[]>([]);
+
+  function changePage(page: Page): void {
+    pageHistory.push(currentPage);
+    currentPage = page;
+  }
+
+  function goBack(): void {
+    const previousPage = pageHistory.pop();
+    if (previousPage) {
+      currentPage = previousPage;
+      if (previousPage.type === "mediaView") {
+        selectedMedia = previousPage.media;
+      }
+    }
+  }
 
   $effect(() => {
     selectedMedia = null;
@@ -71,13 +90,14 @@
     return () => clearTimeout(timeout);
   });
 
-  async function selectMedia(movie: Media): Promise<void> {
-    selectedMedia = movie;
+  async function selectMedia(media: Media): Promise<void> {
+    selectedMedia = media;
+    changePage({ type: "mediaView", media });
   }
 </script>
 
 <Tooltip.Provider>
-  <TopBar bind:query bind:loading />
+  <TopBar bind:query bind:loading onSelectPage={changePage} />
   {#if selectedSimilar}
     {#key selectedSimilar.id}
       <MediaCard
@@ -91,11 +111,13 @@
   {/if}
   <div class="flex h-screen flex-col overflow-hidden">
     <main class="relative min-h-0 flex-1 overflow-hidden">
-      {#if selectedMedia}
+      {#if selectedMedia && currentPage.type === "mediaView"}
         <MediaPage
           media={selectedMedia}
-          onsimilar={(m) => (selectedMedia = m)}
-          onBack={() => (selectedMedia = null)}
+          onsimilar={(m) => {
+            selectMedia(m);
+          }}
+          onBack={() => goBack()}
         />
       {:else}
         <div class="h-full p-6 pt-18">
@@ -129,7 +151,9 @@
               {#each results as media (media.id)}
                 <MediaCard
                   {media}
-                  onclick={() => selectMedia(media)}
+                  onclick={() => {
+                    selectMedia(media);
+                  }}
                   quality={qualityMap.get(media.id) ?? null}
                   onsimilar={(m) => (selectedSimilar = m)}
                 />
