@@ -5,6 +5,7 @@
   import { Spinner } from "$lib/components/ui/spinner/index.js";
   import CoveIcon from "../assets/CoveIcon.svelte";
   import { animate } from "animejs";
+  import type { Page } from "$lib/types/types";
 
   function minimize(): void {
     window.electron.ipcRenderer.send("window-minimize");
@@ -21,12 +22,14 @@
   let {
     query = $bindable(""),
     loading = $bindable(false),
-    onSelectPage,
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    onSelectPage = (p: Page) => {},
   } = $props();
 
   let searchOuter = $state<HTMLDivElement>();
   let searchState = $state<"active" | "hidden">("hidden");
   let searchFocused = $state<boolean>(false);
+  let topbarHovered = $state<boolean>(false);
 
   async function toggleSearch(show: boolean): Promise<void> {
     if (show === (searchState === "active")) return;
@@ -45,10 +48,22 @@
   function selectPage(page: string): void {
     onSelectPage({ type: page });
   }
+  function openQuery(): void {
+    onSelectPage({ type: "query", query });
+  }
 </script>
 
 <div
   class="fixed z-50 flex h-12 w-full items-center justify-between px-6 pt-6 select-none [webkit-app-region:drag]"
+  role="menubar"
+  tabindex="0"
+  onmouseenter={() => {
+    topbarHovered = true;
+  }}
+  onmouseleave={() => {
+    topbarHovered = false;
+    toggleSearch(false);
+  }}
 >
   <div class="flex items-center gap-2">
     <span class="text-2xl font-bold tracking-wider text-orange-400">
@@ -56,37 +71,36 @@
     </span>
   </div>
 
-  <div class="flex items-center gap-2 p-5 [webkit-app-region:no-drag]">
-    <div class="flex items-center gap-1">
-      <ButtonGroup.Root>
-        <Button
-          variant="outline"
-          size="default"
-          onclick={() => {
-            selectPage("home");
-          }}
-        >
-          <House />
-        </Button>
-        <Button
-          variant="outline"
-          size="default"
-          onclick={() => {
-            selectPage("myList");
-          }}
-        >
-          <CirclePlus />
-        </Button>
-      </ButtonGroup.Root>
+  <div class="flex items-center gap-0 p-5 [webkit-app-region:no-drag]">
+    <div class="flex items-center">
+      <Button
+        variant="outline"
+        size="icon"
+        class="rounded-l-full rounded-r-none"
+        onclick={() => {
+          selectPage("home");
+        }}
+      >
+        <House />
+      </Button>
+      <Button
+        variant="outline"
+        size="icon"
+        class="rounded-none"
+        onclick={() => {
+          selectPage("myList");
+        }}
+      >
+        <CirclePlus />
+      </Button>
     </div>
     <div
       bind:this={searchOuter}
-      class="relative flex h-9 items-center rounded-full border bg-transparent"
+      class="relative flex h-9 items-center rounded-l-none rounded-r-full border bg-transparent"
       class:w-9={searchState === "hidden"}
       class:w-[300px]={searchState === "active"}
       role="search"
       onmouseenter={() => toggleSearch(true)}
-      onmouseleave={() => toggleSearch(false)}
     >
       <div
         class="pointer-events-none absolute top-1/2 transition-all duration-300"
@@ -113,11 +127,15 @@
         disabled={searchState === "hidden"}
         onfocus={() => {
           searchFocused = true;
+          openQuery();
         }}
         onfocusout={() => {
           searchFocused = false;
-          toggleSearch(false);
+          if (!topbarHovered) {
+            toggleSearch(false);
+          }
         }}
+        oninput={openQuery}
       />
     </div>
   </div>
