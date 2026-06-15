@@ -85,3 +85,18 @@ export interface Keyword {
   id: number /* int */;
   name: string;
 }
+export interface MediaImageObject {
+  aspect_ratio: number /* float32 */;
+  height: number /* int */;
+  iso_639_1: string;
+  file_path: string;
+  url: string;
+  vote_average: number /* float32 */;
+  vote_count: number /* int */;
+  width: number /* int */;
+}
+export interface MediaImages {
+  backdrops: MediaImageObject[];
+  logos: MediaImageObject[];
+  posters: MediaImageObject[];
+}

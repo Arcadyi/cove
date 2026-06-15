@@ -105,7 +105,7 @@
   }}
 >
   <div class="flex items-center gap-2">
-    <span class="text-2xl font-bold tracking-wider text-orange-400">
+    <span class="text-2xl font-bold tracking-wider text-accent">
       <CoveIcon />
     </span>
   </div>
@@ -127,7 +127,7 @@
         height="100%"
         rx="20"
         fill="none"
-        class="stroke-orange-400"
+        class="stroke-accent"
         stroke-width="2"
         stroke-linecap="round"
       />

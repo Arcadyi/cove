@@ -112,6 +112,23 @@ type scoredMedia struct {
 	score float64
 }
 
+type MediaImageObject struct {
+	AspectRatio float32 `json:"aspect_ratio"`
+	Height      int     `json:"height"`
+	Iso6391     string  `json:"iso_639_1"`
+	FilePath    string  `json:"file_path"`
+	URL         string  `json:"url"`
+	VoteAverage float32 `json:"vote_average"`
+	VoteCount   int     `json:"vote_count"`
+	Width       int     `json:"width"`
+}
+
+type MediaImages struct {
+	Backdrops []MediaImageObject `json:"backdrops"`
+	Logos     []MediaImageObject `json:"logos"`
+	Posters   []MediaImageObject `json:"posters"`
+}
+
 const baseURL = "https://api.themoviedb.org/3"
 const imageBase = "https://image.tmdb.org/t/p/w500"
 const stillBase = "https://image.tmdb.org/t/p/w300"
@@ -444,36 +461,38 @@ func GetClips(tmdbID int, mediaType string, apiKey string) ([]string, error) {
 	return featurettes, nil
 }
 
-func GetImages(tmdbID int, mediaType string, apiKey string) ([]string, error) {
+func GetImages(tmdbID int, mediaType string, apiKey string) (*MediaImages, error) {
 	url := fmt.Sprintf("%s/%s/%d/images?api_key=%s", baseURL, mediaType, tmdbID, apiKey)
+
 	res, err := http.Get(url)
 	if err != nil {
 		return nil, err
 	}
-	defer func(Body io.ReadCloser) {
-		err := Body.Close()
-		if err != nil {
-			log.Println(err)
-		}
-	}(res.Body)
+	defer res.Body.Close()
 
-	var data struct {
-		Backdrops []struct {
-			FilePath string `json:"file_path"`
-		} `json:"backdrops"`
+	if res.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("API request failed with status code: %d", res.StatusCode)
 	}
+
+	var data MediaImages
+
 	if err := json.NewDecoder(res.Body).Decode(&data); err != nil {
 		return nil, err
 	}
 
-	var urls []string
-	for i, b := range data.Backdrops {
-		if i >= 5 {
-			break
-		}
-		urls = append(urls, imageBase+b.FilePath)
+	for i := range data.Backdrops {
+		data.Backdrops[i].URL = imageBase + data.Backdrops[i].FilePath
 	}
-	return urls, nil
+
+	for i := range data.Logos {
+		data.Logos[i].URL = imageBase + data.Logos[i].FilePath
+	}
+
+	for i := range data.Posters {
+		data.Posters[i].URL = imageBase + data.Posters[i].FilePath
+	}
+
+	return &data, nil
 }
 
 func (m *Media) DisplayTitle() string {
@@ -752,19 +771,33 @@ func SetupHandlers(apiKey string) {
 	}))
 
 	http.HandleFunc("/api/images", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
-		tmdbID := r.URL.Query().Get("id")
+		tmdbIDStr := r.URL.Query().Get("id")
 		mediaType := r.URL.Query().Get("type")
-		id := 0
-		_, err := fmt.Sscanf(tmdbID, "%d", &id)
-		if err != nil {
-			http.Error(w, "invalid id", http.StatusBadRequest)
+
+		if tmdbIDStr == "" || mediaType == "" {
+			http.Error(w, "missing required parameters", http.StatusBadRequest)
 			return
 		}
+
+		if mediaType != "movie" && mediaType != "tv" {
+			http.Error(w, "invalid media type", http.StatusBadRequest)
+			return
+		}
+
+		id, err := strconv.Atoi(tmdbIDStr)
+		if err != nil || id <= 0 {
+			http.Error(w, "invalid id format", http.StatusBadRequest)
+			return
+		}
+
 		images, err := GetImages(id, mediaType, apiKey)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+
+		w.Header().Set("Content-Type", "application/json")
+
 		err = json.NewEncoder(w).Encode(images)
 		if err != nil {
 			log.Println(err)

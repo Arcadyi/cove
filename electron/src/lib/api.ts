@@ -1,4 +1,4 @@
-import type { Details, Media } from "$lib/types/tmdb";
+import type { Details, Media, MediaImages } from "$lib/types/tmdb";
 import type { Stream } from "$lib/types/addons";
 
 const BASE = "http://localhost:6969/api";
@@ -64,5 +64,9 @@ export const api = {
   getDetails: async (media: Media): Promise<Details> =>
     fetch(
       `http://localhost:6969/api/details?id=${media.id}&type=${media.media_type}`,
+    ).then((r) => r.json()),
+  getImages: async (media: Media): Promise<MediaImages> =>
+    fetch(
+      `${BASE}/images?id=${media.id}&type=${media.media_type}`,
     ).then((r) => r.json()),
 };

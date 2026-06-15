@@ -18,7 +18,6 @@
 
   let results: Media[] = $state([]);
   let keywords: { id: number; name: string }[] = $state([]);
-  // svelte-ignore non_reactive_update
   let qualityMap = new SvelteMap<number, string>();
 
   let resultsTextEl = $state<HTMLElement>();
@@ -42,8 +41,9 @@
       delay: stagger(50),
     });
 
-    hasAnimated = true; // ← flip after animation kicks off
+    hasAnimated = true;
   }
+
   $effect(() => {
     const q = query.trim();
     const timeout = setTimeout(async () => {
@@ -62,7 +62,7 @@
       results = searchResults;
       keywords = kwResults ?? [];
       loading = false;
-      // Batch fetch quality for all results
+
       if (searchResults.length > 0) {
         const ids = searchResults.map((m) => m.id).join(",");
         fetch(`http://localhost:6969/api/quality/batch?ids=${ids}`)
@@ -95,20 +95,61 @@
   });
 </script>
 
-<div class="h-full gap-2.5 p-6 pt-18">
+<div class="relative h-full p-6 pt-18">
   {#if query.length > 0}
-    <span
-      class="mb-2 flex text-center text-2xl font-semibold"
-      class:invisible={!hasAnimated}
+    <div
+      class="absolute top-18 right-6 left-6 z-10 p-4 shadow-lg"
+      style="
+      background: linear-gradient(to bottom, var(--background) 0%, var(--background) 70%, rgba(0,0,0,0) 100%);
+      pointer-events: none;
+    "
     >
-      Results for
-      <span class="size-1.5"></span>
-      {#key displayQuery}
-        <span class="text-accent" bind:this={resultsTextEl}>{displayQuery}</span
+      <div class="pointer-events-auto">
+        <div
+          class="mb-2 flex text-center text-2xl font-semibold"
+          class:invisible={!hasAnimated}
         >
-      {/key}
-    </span>
+          Results for
+          <span class="size-1.5"></span>
+          {#key displayQuery}
+            <span class="text-accent" bind:this={resultsTextEl}
+              >{displayQuery}</span
+            >
+          {/key}
+        </div>
+
+        {#if !loading && keywords.length > 1}
+          <div class="flex flex-col gap-2 align-middle">
+            <span
+              class="flex shrink-0 text-center text-xs font-medium text-muted-foreground"
+            >
+              More to Explore:
+            </span>
+            <ScrollArea
+              orientation="horizontal"
+              class="flex-1 overflow-clip rounded-sm"
+            >
+              <div class="flex gap-2 pb-3">
+                {#each keywords as kw (kw.id)}
+                  <Button
+                    variant="ghost"
+                    size="xs"
+                    class="text-muted-foreground"
+                    onclick={() => {
+                      onSuggested(kw.name);
+                    }}
+                  >
+                    {kw.name}
+                  </Button>
+                {/each}
+              </div>
+            </ScrollArea>
+          </div>
+        {/if}
+      </div>
+    </div>
   {/if}
+
   {#if loading}
     <div class="flex h-full w-full flex-col items-center justify-center">
       <Spinner class="size-52" />
@@ -116,36 +157,8 @@
     </div>
   {:else}
     <ScrollArea class="h-full">
-      {#if keywords.length > 1}
-        <div class="flex flex-col gap-2 align-middle">
-          <span
-            class="flex shrink-0 text-center text-xs font-medium text-muted-foreground"
-          >
-            More to Explore:
-          </span>
-          <ScrollArea
-            orientation="horizontal"
-            class="flex-1 overflow-clip rounded-sm"
-          >
-            <div class="flex gap-2 pb-3">
-              {#each keywords as kw (kw.id)}
-                <Button
-                  variant="ghost"
-                  size="xs"
-                  class="text-muted-foreground"
-                  onclick={() => {
-                    onSuggested(kw.name);
-                  }}
-                >
-                  {kw.name}
-                </Button>
-              {/each}
-            </div>
-          </ScrollArea>
-        </div>
-      {/if}
       <div
-        class="grid gap-4 pr-4"
+        class="mt-32 grid gap-4 pr-4"
         style="grid-template-columns: repeat(auto-fill, minmax(150px, 1fr))"
       >
         {#each results as media (media.id)}

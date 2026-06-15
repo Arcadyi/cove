@@ -1,7 +1,7 @@
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
 import { Stream } from "$lib/types/addons";
-import { Details } from "$lib/types/tmdb";
+import { Details, MediaImages } from "$lib/types/tmdb";
 
 export function cn(...inputs: ClassValue[]): string {
   return twMerge(clsx(inputs));
@@ -106,4 +106,53 @@ export function formatRating(d: Details): string {
     if (r.iso_3166_1 === "US" && r.rating) return r.rating;
   }
   return "";
+}
+
+interface ImageOptions {
+  aspect_ratio?: number;
+  height?: number;
+  iso?: string;
+  voteAverage?: number;
+  voteCount?: number;
+  minWidth?: number;
+  randomize?: boolean;
+}
+
+export function getImageOpt(
+  images: MediaImages | undefined,
+  type: "backdrops" | "logos" | "posters",
+  opts: ImageOptions = {},
+): string {
+  if (!images || !images[type] || images[type].length === 0) return "";
+
+  const list = images[type];
+
+  // 1. Filter all images that meet the criteria
+  const matches = list.filter((img) => {
+    if (opts.iso && img.iso_639_1 !== null && img.iso_639_1 !== opts.iso)
+      return false;
+    if (opts.height !== undefined && img.height !== opts.height) return false;
+    if (
+      opts.aspect_ratio !== undefined &&
+      Math.abs(img.aspect_ratio - opts.aspect_ratio) > 0.1
+    )
+      return false;
+    if (opts.voteAverage !== undefined && img.vote_average < opts.voteAverage)
+      return false;
+    if (opts.voteCount !== undefined && img.vote_count < opts.voteCount)
+      return false;
+    return !(opts.minWidth !== undefined && img.width < opts.minWidth);
+  });
+
+  // 2. Handle the selection
+  if (matches.length > 0) {
+    if (opts.randomize) {
+      const randomIndex = Math.floor(Math.random() * matches.length);
+      return matches[randomIndex].url;
+    }
+    return matches[0].url;
+  }
+
+  // 3. Fallback: Return the first available image if nothing matches criteria
+  return list[0]?.url ?? "";
 }

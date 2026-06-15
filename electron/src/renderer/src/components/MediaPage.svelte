@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { Stream } from "$lib/types/addons";
-  import type { Media } from "$lib/types/tmdb";
+  import type { Media, MediaImages } from "$lib/types/tmdb";
   import Player from "./Player.svelte";
   import { Button } from "$lib/components/ui/button";
   import { ChevronLeft, Star } from "lucide-svelte";
@@ -12,6 +12,7 @@
     countryName,
     formatRating,
     formatRuntime,
+    getImageOpt,
     qualityClass,
   } from "$lib/utils";
 
@@ -43,6 +44,7 @@
   let maxQuality = $state<string | null>();
   let numberOfSeasons = $state<number | null>(null);
   let numberOfEpisodes = $state<number | null>(null);
+  let images = $state<MediaImages>();
 
   $effect(() => {
     detailsLoading = true;
@@ -52,8 +54,10 @@
       api.getTrailer(media),
       api.getSimilar(media),
       api.getDetails(media),
+      api.getImages(media),
     ])
-      .then(([trailerUrl, similarList, details]) => {
+      .then(([trailerUrl, similarList, details, img]) => {
+        images = img;
         trailer = trailerUrl;
         similar = similarList;
 
@@ -110,7 +114,6 @@
       .catch(() => {});
   }
 
-  const title = $derived(media.media_type === "tv" ? media.name : media.title);
   const year = $derived(
     (media.media_type === "tv"
       ? media.first_air_date
@@ -152,8 +155,11 @@
     class="relative flex h-full w-full overflow-hidden rounded-xl border border-border bg-background pt-18 pr-6"
   >
     <div
-      class="absolute inset-0 scale-110 bg-cover bg-center opacity-30 blur-sm"
-      style="background-image: url('{media.poster_path}')"
+      class="absolute inset-0 scale-110 bg-cover bg-center opacity-30 blur-md"
+      style="background-image: url('{getImageOpt(images, 'backdrops', {
+        iso: 'en',
+        randomize: true,
+      })}')"
     ></div>
 
     <div class="relative z-10 flex h-full w-full gap-1 rounded-2xl">
@@ -169,12 +175,20 @@
             {:else}
               <div class="space-y-4">
                 <div class="flex items-center gap-3">
-                  <div class="flex flex-wrap items-center gap-2">
-                    <h2
-                      class="text-3xl font-bold tracking-tight text-foreground drop-shadow-lg"
+                  <div class="flex items-center gap-2">
+                    <div
+                      class="flex max-h-20 max-w-64 items-center justify-center"
                     >
-                      {title}
-                    </h2>
+                      {#if images && images.logos.length > 0}
+                        <img
+                          src={getImageOpt(images, "logos", { iso: "en" })}
+                          alt="Logo"
+                          class="max-h-* + + w-auto object-scale-down"
+                        />
+                      {:else}
+                        <span class="text-3xl font-bold">{media.title}</span>
+                      {/if}
+                    </div>
                     {#if year}
                       <Badge variant="default">{year}</Badge>
                     {/if}
