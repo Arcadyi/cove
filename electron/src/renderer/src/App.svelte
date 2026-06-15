@@ -8,6 +8,7 @@
 
   import type { Page } from "$lib/types/types";
   import QueryPage from "./components/QueryPage.svelte";
+  import HomePage from "./components/HomePage.svelte";
 
   let query = $state("");
 
@@ -85,6 +86,8 @@
             changePage({ type: "query", query: name });
           }}
         />
+      {:else if currentPage.type === "home"}
+        <HomePage />
       {/if}
     </main>
   </div>
