@@ -99,108 +99,75 @@ func StreamTorrent(infoHash string, w http.ResponseWriter, r *http.Request) {
 	http.ServeContent(w, r, largest.DisplayPath(), time.Time{}, largest.NewReader())
 }
 
-func ProbeDuration(mediaURL string) (float64, error) {
+// ProbeAll runs a single ffprobe invocation and returns audio tracks,
+// subtitle tracks, the first video codec name, and the container duration.
+// Replaces the old ProbeAudioTracks / ProbeSubtitleTracks / ProbeDuration
+// triple-call pattern so the torrent stream is only buffered once.
+func ProbeAll(mediaURL string) ([]AudioTrackInfo, []SubtitleTrackInfo, string, float64, error) {
 	cmd := exec.Command("ffprobe",
 		"-v", "quiet",
 		"-print_format", "json",
-		"-show_entries", "format=duration",
+		"-show_streams",
+		"-show_format",
 		mediaURL,
 	)
 	out, err := cmd.Output()
 	if err != nil {
-		return 0, fmt.Errorf("ffprobe duration: %w", err)
+		return nil, nil, "", 0, fmt.Errorf("ffprobe: %w", err)
 	}
+
 	var result struct {
+		Streams []struct {
+			CodecType string `json:"codec_type"`
+			CodecName string `json:"codec_name"`
+			Tags      struct {
+				Language string `json:"language"`
+				Title    string `json:"title"`
+			} `json:"tags"`
+		} `json:"streams"`
 		Format struct {
 			Duration string `json:"duration"`
 		} `json:"format"`
 	}
 	if err := json.Unmarshal(out, &result); err != nil {
-		return 0, err
-	}
-	return strconv.ParseFloat(result.Format.Duration, 64)
-}
-
-// ProbeAudioTracks runs ffprobe on the given URL and returns all audio tracks found.
-func ProbeAudioTracks(mediaURL string) ([]AudioTrackInfo, error) {
-	cmd := exec.Command("ffprobe",
-		"-v", "quiet",
-		"-print_format", "json",
-		"-show_streams",
-		"-select_streams", "a",
-		mediaURL,
-	)
-	out, err := cmd.Output()
-	if err != nil {
-		return nil, fmt.Errorf("ffprobe: %w", err)
+		return nil, nil, "", 0, err
 	}
 
-	var result struct {
-		Streams []struct {
-			Tags struct {
-				Language string `json:"language"`
-				Title    string `json:"title"`
-			} `json:"tags"`
-			CodecName string `json:"codec_name"`
-		} `json:"streams"`
-	}
-	if err := json.Unmarshal(out, &result); err != nil {
-		return nil, err
-	}
+	var audioTracks []AudioTrackInfo
+	var subtitleTracks []SubtitleTrackInfo
+	var videoCodec string
+	audioIdx := 0
+	subtitleIdx := 0
 
-	tracks := make([]AudioTrackInfo, len(result.Streams))
-	for i, s := range result.Streams {
-		tracks[i] = AudioTrackInfo{
-			Index:    i,
-			Language: s.Tags.Language,
-			Title:    s.Tags.Title,
-			Codec:    s.CodecName,
+	for _, s := range result.Streams {
+		switch s.CodecType {
+		case "video":
+			if videoCodec == "" {
+				videoCodec = s.CodecName
+			}
+		case "audio":
+			audioTracks = append(audioTracks, AudioTrackInfo{
+				Index:    audioIdx,
+				Language: s.Tags.Language,
+				Title:    s.Tags.Title,
+				Codec:    s.CodecName,
+			})
+			audioIdx++
+		case "subtitle":
+			if !imageBasedSubtitleCodecs[s.CodecName] {
+				subtitleTracks = append(subtitleTracks, SubtitleTrackInfo{
+					Index:    subtitleIdx,
+					Language: s.Tags.Language,
+					Title:    s.Tags.Title,
+					Codec:    s.CodecName,
+				})
+			}
+			subtitleIdx++
 		}
 	}
-	return tracks, nil
-}
 
-// ProbeSubtitleTracks runs ffprobe on the given URL and returns all
-// text-based subtitle tracks (image-based PGS/DVDSUB are excluded).
-func ProbeSubtitleTracks(mediaURL string) ([]SubtitleTrackInfo, error) {
-	cmd := exec.Command("ffprobe",
-		"-v", "quiet",
-		"-print_format", "json",
-		"-show_streams",
-		"-select_streams", "s",
-		mediaURL,
-	)
-	out, err := cmd.Output()
-	if err != nil {
-		return nil, fmt.Errorf("ffprobe subtitles: %w", err)
-	}
-
-	var result struct {
-		Streams []struct {
-			Tags struct {
-				Language string `json:"language"`
-				Title    string `json:"title"`
-			} `json:"tags"`
-			CodecName string `json:"codec_name"`
-		} `json:"streams"`
-	}
-	if err := json.Unmarshal(out, &result); err != nil {
-		return nil, err
-	}
-
-	var tracks []SubtitleTrackInfo
-	for i, s := range result.Streams {
-		if imageBasedSubtitleCodecs[s.CodecName] {
-			continue
-		}
-		tracks = append(tracks, SubtitleTrackInfo{
-			Index:    i,
-			Language: s.Tags.Language,
-			Title:    s.Tags.Title,
-			Codec:    s.CodecName,
-		})
-	}
-	return tracks, nil
+	duration, _ := strconv.ParseFloat(result.Format.Duration, 64)
+	return audioTracks, subtitleTracks, videoCodec, duration, nil
 }
 
 // ExtractSubtitle extracts a single subtitle track and serves it as WebVTT.
@@ -462,28 +429,25 @@ func SetupHandlers(apiKey string) {
 			return
 		}
 
-		audioTracks, err := ProbeAudioTracks(probeInput)
+		audioTracks, subtitleTracks, videoCodec, duration, err := ProbeAll(probeInput)
 		if err != nil {
-			log.Println("probe audio error:", err)
+			log.Println("probe error:", err)
 			audioTracks = []AudioTrackInfo{}
-		}
-
-		subtitleTracks, err := ProbeSubtitleTracks(probeInput)
-		if err != nil {
-			log.Println("probe subtitle error:", err)
 			subtitleTracks = []SubtitleTrackInfo{}
 		}
-
-		duration, err := ProbeDuration(probeInput)
-		if err != nil {
-			log.Println("probe duration error:", err)
+		if audioTracks == nil {
+			audioTracks = []AudioTrackInfo{}
+		}
+		if subtitleTracks == nil {
+			subtitleTracks = []SubtitleTrackInfo{}
 		}
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]any{
-			"audio":     audioTracks,
-			"subtitles": subtitleTracks,
-			"duration":  duration,
+			"audio":      audioTracks,
+			"subtitles":  subtitleTracks,
+			"videoCodec": videoCodec,
+			"duration":   duration,
 		})
 	}))
 
@@ -548,15 +512,16 @@ func SetupHandlers(apiKey string) {
 	// POST /api/hls/start — starts an HLS session, returns the session ID
 	http.HandleFunc("/api/hls/start", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		var body struct {
-			Input    string           `json:"input"`
-			Tracks   []AudioTrackInfo `json:"tracks"`
-			Duration float64          `json:"duration"` // Added duration
+			Input      string           `json:"input"`
+			Tracks     []AudioTrackInfo `json:"tracks"`
+			Duration   float64          `json:"duration"`
+			VideoCodec string           `json:"videoCodec"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		sessionID, err := StartHLSSession(body.Input, body.Tracks, body.Duration)
+		sessionID, err := StartHLSSession(body.Input, body.Tracks, body.Duration, body.VideoCodec)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return

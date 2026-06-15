@@ -12,6 +12,8 @@
 
   let group: SVGGElement;
 
+  let { size } = $props();
+
   onMount(() => {
     animateWave(true);
     animateWave2(false); // opposite phase
@@ -44,8 +46,8 @@
 </script>
 
 <svg
-  width="45"
-  height="45"
+  width={size}
+  height={size}
   viewBox="0 0 200 200"
   fill="none"
   xmlns="http://www.w3.org/2000/svg"

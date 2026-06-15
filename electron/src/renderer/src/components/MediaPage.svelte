@@ -141,14 +141,6 @@
       {media}
       externalSubtitles={activeSubtitles}
     />
-    <Button
-      variant="outline"
-      size="sm"
-      class="absolute top-5 left-6 z-50 bg-background/50 backdrop-blur-md"
-      onclick={() => (activeStream = null)}
-    >
-      <ChevronLeft class="mr-1 size-4" /> Back
-    </Button>
   </div>
 {:else}
   <div
@@ -183,7 +175,7 @@
                         <img
                           src={getImageOpt(images, "logos", { iso: "en" })}
                           alt="Logo"
-                          class="max-h-* + + w-auto object-scale-down"
+                          class="max-h-full w-auto max-w-full object-contain"
                         />
                       {:else}
                         <span class="text-3xl font-bold">{media.title}</span>

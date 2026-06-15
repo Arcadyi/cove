@@ -8,6 +8,7 @@
   import { Button } from "$lib/components/ui/button";
   import { animate, splitText, stagger } from "animejs";
   import { tick } from "svelte";
+  import CoveIcon from "../assets/CoveIcon.svelte";
 
   let {
     query = $bindable(""),
@@ -150,12 +151,7 @@
     </div>
   {/if}
 
-  {#if loading}
-    <div class="flex h-full w-full flex-col items-center justify-center">
-      <Spinner class="size-52" />
-      <span class="font-bold"> Searching...</span>
-    </div>
-  {:else}
+  {#if !loading}
     <ScrollArea class="h-full">
       <div
         class="mt-32 grid gap-4 pr-4"

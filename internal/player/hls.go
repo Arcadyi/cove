@@ -13,12 +13,14 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
 type hlsSession struct {
 	id         string
 	input      string
+	videoCodec string
 	tracks     []AudioTrackInfo
 	duration   float64
 	dir        string
@@ -28,6 +30,12 @@ type hlsSession struct {
 	lastUsed   time.Time
 	mu         sync.Mutex
 	restarting bool
+}
+
+// browserSafeVideoCodecs can be stream-copied into HLS without re-encoding.
+// Everything else falls back to libx264 (capped threads to avoid CPU saturation).
+var browserSafeVideoCodecs = map[string]bool{
+	"h264": true, "avc": true, "avc1": true,
 }
 
 var (
@@ -96,14 +104,22 @@ func (s *hlsSession) startFfmpeg(startSeg int) error {
 	args = append(args, "-i", s.input)
 
 	// ── Video output ────────────────────────────────────────────────────────
-	args = append(args,
-		"-map", "0:v:0",
-		"-c:v", "libx264",
-		"-preset", "veryfast",
-		"-crf", "23",
-		"-force_key_frames", "expr:gte(t,n_forced*10)", // Ensure exact 10s chunks
-		"-an",
-	)
+	// Copy when the codec is already browser-safe (H.264) — zero transcode CPU.
+	// Fall back to libx264 for other codecs, capped to 4 threads so ffmpeg
+	// can't saturate all cores even during a full re-encode.
+	if browserSafeVideoCodecs[strings.ToLower(s.videoCodec)] {
+		args = append(args, "-map", "0:v:0", "-c:v", "copy", "-an")
+	} else {
+		args = append(args,
+			"-map", "0:v:0",
+			"-c:v", "libx264",
+			"-preset", "veryfast",
+			"-crf", "23",
+			"-threads", "4",
+			"-force_key_frames", "expr:gte(t,n_forced*10)",
+			"-an",
+		)
+	}
 	if startTime > 0 {
 		args = append(args, "-output_ts_offset", fmt.Sprintf("%.3f", startTime))
 	}
@@ -149,6 +165,11 @@ func (s *hlsSession) startFfmpeg(startSeg int) error {
 		return fmt.Errorf("start ffmpeg: %w", err)
 	}
 	s.running = true
+	// Run ffmpeg at lower OS priority so it yields to the Go server and the
+	// browser under load.  Nice 10 still gives plenty of CPU when idle.
+	if s.cmd.Process != nil {
+		_ = syscall.Setpriority(syscall.PRIO_PROCESS, s.cmd.Process.Pid, 10)
+	}
 
 	go func(cmd *exec.Cmd, sess *hlsSession) {
 		err := cmd.Wait()
@@ -170,7 +191,7 @@ func (s *hlsSession) startFfmpeg(startSeg int) error {
 //
 // Audio is copied when the codec is already browser-safe (AAC etc.),
 // otherwise transcoded to AAC. Video is always copied.
-func StartHLSSession(input string, tracks []AudioTrackInfo, duration float64) (string, error) {
+func StartHLSSession(input string, tracks []AudioTrackInfo, duration float64, videoCodec string) (string, error) {
 	id, err := newSessionID()
 	if err != nil {
 		return "", err
@@ -192,12 +213,13 @@ func StartHLSSession(input string, tracks []AudioTrackInfo, duration float64) (s
 	}
 
 	session := &hlsSession{
-		id:       id,
-		input:    input,
-		tracks:   tracks,
-		duration: duration,
-		dir:      dir,
-		lastUsed: time.Now(),
+		id:         id,
+		input:      input,
+		videoCodec: videoCodec,
+		tracks:     tracks,
+		duration:   duration,
+		dir:        dir,
+		lastUsed:   time.Now(),
 	}
 
 	if err := session.startFfmpeg(0); err != nil {

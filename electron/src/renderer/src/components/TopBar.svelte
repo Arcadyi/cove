@@ -106,7 +106,7 @@
 >
   <div class="flex items-center gap-2">
     <span class="text-2xl font-bold tracking-wider text-accent">
-      <CoveIcon />
+      <CoveIcon size={45} />
     </span>
   </div>
 
