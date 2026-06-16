@@ -97,9 +97,9 @@
 
   const needsHLS = $derived(
     audioTracks.length > 1 ||
-      audioTracks.some((t) =>
-        UNSUPPORTED_AUDIO_CODECS.has(t.codec.toLowerCase()),
-      ),
+    audioTracks.some((t) =>
+      UNSUPPORTED_AUDIO_CODECS.has(t.codec.toLowerCase()),
+    ),
   );
 
   // ─── Playback state (driven by Vidstack events) ─────────────────────────────
@@ -273,8 +273,33 @@
 
         e.detail.addEventListener?.("hls-instance", (ev: any) => {
           const hls = ev.detail;
-          hls.on(Hls.Events.ERROR, (_, data) => {
-            /* recovery */
+          let mediaRecoveryAttempts = 0;
+
+          hls.on(Hls.Events.ERROR, (_: any, data: any) => {
+            if (!data.fatal) return; // hls.js handles non-fatal errors itself
+
+            if (data.type === Hls.ErrorTypes.MEDIA_ERROR && mediaRecoveryAttempts < 3) {
+              // Media errors (codec/buffer issues) — try swapAudioCodec on
+              // the second attempt, which forces hls.js to reinitialise the
+              // SourceBuffer with a different codec string.
+              mediaRecoveryAttempts++;
+              if (mediaRecoveryAttempts === 1) {
+                console.warn("[hls] media error — attempting recoverMediaError");
+                hls.recoverMediaError();
+              } else {
+                console.warn("[hls] media error — attempting swapAudioCodec + recoverMediaError");
+                hls.swapAudioCodec();
+                hls.recoverMediaError();
+              }
+            } else if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
+              // Network errors — just resume loading; the segment server will
+              // keep the connection alive until the segment is ready.
+              console.warn("[hls] network error — resuming load");
+              hls.startLoad();
+            } else {
+              console.error("[hls] unrecoverable error", data);
+              error = data.details ?? "Stream error.";
+            }
           });
         });
       }
@@ -384,21 +409,31 @@
     return () => clearInterval(id);
   });
 
-  // ─── Torrent progress polling ────────────────────────────────────────────────
+  // ─── Torrent progress (SSE) ──────────────────────────────────────────────────
+  // One persistent connection replaces per-tick HTTP requests.
+  // EventSource auto-reconnects on its own; we just close it on cleanup.
 
   $effect(() => {
     if (!isHash) return () => {};
-    const id = setInterval(async () => {
-      const d = await fetch(
-        `http://localhost:6969/api/progress?hash=${src}`,
-      ).then((r) => r.json());
-      if (d.found) {
-        torrentProgress = d.progress ?? 0;
-        peers = d.peers ?? 0;
-        torrentSpeed = d.speed ?? "0 B/s";
+
+    const es = new EventSource(
+      `http://localhost:6969/api/progress/stream?hash=${src}`,
+    );
+
+    es.onmessage = (e) => {
+      try {
+        const d = JSON.parse(e.data);
+        if (d.found) {
+          torrentProgress = d.progress ?? 0;
+          peers = d.peers ?? 0;
+          torrentSpeed = d.speed ?? "0 B/s";
+        }
+      } catch {
+        // ignore malformed frames
       }
-    }, 2000);
-    return () => clearInterval(id);
+    };
+
+    return () => es.close();
   });
 
   // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -430,11 +465,24 @@
   let currentCueText = $state<string | null>(null);
   let subtitleLoading = $state(false);
 
+  // ─── Pre-warm subtitle cache (sequential) ────────────────────────────────────
+  // Fetch built-in subtitles one at a time so we don't fire N simultaneous
+  // requests and exhaust the browser's ~6 connection slots to localhost:6969.
+
   $effect(() => {
     if (builtInSubtitles.length === 0) return;
-    for (const sub of builtInSubtitles) {
-      fetch(sub.url).catch(() => {});
-    }
+    let cancelled = false;
+
+    (async () => {
+      for (const sub of builtInSubtitles) {
+        if (cancelled) break;
+        await fetch(sub.url).catch(() => {});
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
   });
 
   const textTracks = $derived([
@@ -679,13 +727,13 @@
                 <Headphones class="size-4" />
                 <span class="text-xs">
                   {vidstackAudioTracks.find((t) => t.selected)?.label ??
-                    "Audio"}
+                  "Audio"}
                 </span>
               </Popover.Trigger>
               <Popover.Content side="top" class="w-52 p-0">
                 <div class="border-b border-border px-3 py-2">
                   <span class="text-xs font-medium text-muted-foreground"
-                    >Audio Track</span
+                  >Audio Track</span
                   >
                 </div>
                 <div class="p-1">
@@ -850,9 +898,9 @@
                     <div class="flex justify-between text-xs">
                       <span class="text-muted-foreground">Sync offset</span>
                       <span
-                        >{subtitleSettings.offset > 0 ? "+" : ""}{(
-                          subtitleSettings.offset / 1000
-                        ).toFixed(1)}s</span
+                      >{subtitleSettings.offset > 0 ? "+" : ""}{(
+                        subtitleSettings.offset / 1000
+                      ).toFixed(1)}s</span
                       >
                     </div>
                     <div class="flex gap-1">
@@ -865,7 +913,7 @@
                           );
                         }}
                         class="flex h-7 flex-1 items-center justify-center rounded bg-secondary text-sm hover:bg-secondary/80"
-                        >−500ms</button
+                      >−500ms</button
                       >
                       <button
                         onclick={(e) => {
@@ -876,7 +924,7 @@
                           );
                         }}
                         class="flex h-7 flex-1 items-center justify-center rounded bg-secondary text-sm hover:bg-secondary/80"
-                        >+500ms</button
+                      >+500ms</button
                       >
                     </div>
                     {#if subtitleSettings.offset !== 0}
@@ -886,7 +934,7 @@
                           subtitleSettings.offset = 0;
                         }}
                         class="w-full rounded py-0.5 text-center text-xs text-muted-foreground hover:text-foreground"
-                        >Reset</button
+                      >Reset</button
                       >
                     {/if}
                   </div>
@@ -1082,7 +1130,7 @@
         >
           <span
             class="col-start-1 row-start-1 block text-4xl font-bold tracking-widest text-white/20 md:text-6xl"
-            >{title}</span
+          >{title}</span
           >
           <span
             class="col-start-1 row-start-1 block overflow-hidden text-4xl font-bold tracking-widest text-white transition-all duration-500 md:text-6xl"

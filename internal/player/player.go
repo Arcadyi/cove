@@ -2,6 +2,7 @@ package player
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -18,6 +19,7 @@ import (
 	"github.com/Arcadyi/cove/internal/tmdb"
 	"github.com/Arcadyi/cove/internal/utils"
 	"github.com/anacrolix/torrent"
+	"golang.org/x/sync/singleflight"
 )
 
 var client *torrent.Client
@@ -96,7 +98,24 @@ func StreamTorrent(infoHash string, w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
 	}
-	http.ServeContent(w, r, largest.DisplayPath(), time.Time{}, largest.NewReader())
+
+	reader := largest.NewReader()
+	// Closing the reader matters a lot here. Every ffmpeg (re)start on a seek
+	// opens a new request to this handler and a new reader. anacrolix readers
+	// hold piece-download priorities until Close(); if we never close them, each
+	// killed-ffmpeg's reader keeps prioritising its now-stale region and they all
+	// compete for the same swarm bandwidth, starving the region the user just
+	// seeked to. Closing on handler return releases that stale prioritisation.
+	defer reader.Close()
+
+	// Responsive mode hands ffmpeg whatever bytes have arrived instead of
+	// blocking until a full readahead window is downloaded, and a generous
+	// readahead lets the client fetch pieces ahead of the encoder so a seek
+	// doesn't stall mid-segment.
+	reader.SetResponsive()
+	reader.SetReadahead(16 << 20) // 16 MiB
+
+	http.ServeContent(w, r, largest.DisplayPath(), time.Time{}, reader)
 }
 
 // ProbeAll runs a single ffprobe invocation and returns audio tracks,
@@ -104,7 +123,10 @@ func StreamTorrent(infoHash string, w http.ResponseWriter, r *http.Request) {
 // Replaces the old ProbeAudioTracks / ProbeSubtitleTracks / ProbeDuration
 // triple-call pattern so the torrent stream is only buffered once.
 func ProbeAll(mediaURL string) ([]AudioTrackInfo, []SubtitleTrackInfo, string, float64, error) {
-	cmd := exec.Command("ffprobe",
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "ffprobe",
 		"-v", "quiet",
 		"-print_format", "json",
 		"-show_streams",
@@ -175,6 +197,7 @@ func ProbeAll(mediaURL string) ([]AudioTrackInfo, []SubtitleTrackInfo, string, f
 var (
 	subtitleCacheMu sync.RWMutex
 	subtitleCache   = map[string][]byte{}
+	subtitleGroup   singleflight.Group
 )
 
 func subtitleCacheKey(input string, index int) string {
@@ -187,29 +210,39 @@ func ExtractSubtitle(input string, subtitleIndex int, w http.ResponseWriter) {
 	subtitleCacheMu.RLock()
 	cached, ok := subtitleCache[key]
 	subtitleCacheMu.RUnlock()
+	if ok {
+		w.Header().Set("Content-Type", "text/vtt; charset=utf-8")
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Write(cached)
+		return
+	}
 
-	if !ok {
-		cmd := exec.Command("ffmpeg",
+	result, err, _ := subtitleGroup.Do(key, func() (interface{}, error) {
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, "ffmpeg",
 			"-i", input,
 			"-map", fmt.Sprintf("0:s:%d", subtitleIndex),
-			"-c:s", "webvtt",
-			"-f", "webvtt",
-			"pipe:1",
+			"-c:s", "webvtt", "-f", "webvtt", "pipe:1",
 		)
 		out, err := cmd.Output()
 		if err != nil {
-			http.Error(w, "subtitle extraction failed: "+err.Error(), http.StatusInternalServerError)
-			return
+			return nil, err
 		}
 		subtitleCacheMu.Lock()
 		subtitleCache[key] = out
 		subtitleCacheMu.Unlock()
-		cached = out
+		return out, nil
+	})
+
+	if err != nil {
+		http.Error(w, "subtitle extraction failed: "+err.Error(), http.StatusInternalServerError)
+		return
 	}
 
 	w.Header().Set("Content-Type", "text/vtt; charset=utf-8")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w.Write(cached)
+	w.Write(result.([]byte))
 }
 
 // StreamWithAudio uses ffmpeg to select a specific audio track, transcode it to AAC,
@@ -307,6 +340,18 @@ func formatSpeed(bytesPerSec int64) string {
 		return fmt.Sprintf("%.1f KB/s", float64(bytesPerSec)/1024)
 	default:
 		return fmt.Sprintf("%d B/s", bytesPerSec)
+	}
+}
+
+// NewServer returns a pre-configured *http.Server. Callers should use this
+// instead of http.ListenAndServe so that ReadHeaderTimeout is always set.
+func NewServer(addr string) *http.Server {
+	return &http.Server{
+		Addr: addr,
+		// Guards against slow-loris style attacks. Streaming responses
+		// (HLS segments, torrent) legitimately run for minutes, so we
+		// do NOT set WriteTimeout or IdleTimeout here.
+		ReadHeaderTimeout: 10 * time.Second,
 	}
 }
 
@@ -572,11 +617,40 @@ func SetupHandlers(apiKey string) {
 		ServeHLSFile(parts[0], parts[1], w, r)
 	}))
 
+	// Legacy polling endpoint — kept for compatibility; prefer /api/progress/stream (SSE).
 	http.HandleFunc("/api/progress", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		hash := r.URL.Query().Get("hash")
 		err := json.NewEncoder(w).Encode(GetProgress(hash))
 		if err != nil {
 			log.Println(err)
+		}
+	}))
+
+	http.HandleFunc("/api/progress/stream", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		hash := r.URL.Query().Get("hash")
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("Connection", "keep-alive")
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			http.Error(w, "streaming not supported", http.StatusInternalServerError)
+			return
+		}
+
+		ticker := time.NewTicker(2 * time.Second)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-r.Context().Done():
+				return
+			case <-ticker.C:
+				data, _ := json.Marshal(GetProgress(hash))
+				fmt.Fprintf(w, "data: %s\n\n", data)
+				flusher.Flush()
+			}
 		}
 	}))
 

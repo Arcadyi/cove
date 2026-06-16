@@ -68,6 +68,12 @@ func main() {
 		}
 	}))
 
+	srv := &http.Server{
+		Addr:              ":6969",
+		ReadHeaderTimeout: 10 * time.Second,
+		// Don't set WriteTimeout — HLS segment serving and torrent streaming are long-lived
+	}
+
 	log.Println("Server Running on: 6969")
-	log.Fatal(http.ListenAndServe(":6969", nil))
+	log.Fatal(srv.ListenAndServe())
 }
