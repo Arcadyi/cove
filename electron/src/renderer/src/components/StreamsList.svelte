@@ -42,7 +42,7 @@
   let seasons = $state<TVSeason[]>([]);
   let episodes = $state<TVEpisode[]>([]);
   let selectedSeason = $state<number | null>(null);
-  let selectedEpisode = $state<TVEpisode | null>(null); // null = episode browser view
+  let selectedEpisode = $state<TVEpisode | null>(null);
   let loadingSeasons = $state(false);
   let loadingEpisodes = $state(false);
 
@@ -53,7 +53,6 @@
 
   // Data fetching
 
-  // Load seasons once for TV
   $effect(() => {
     if (!isTV) return;
     loadingSeasons = true;
@@ -68,7 +67,6 @@
       .finally(() => (loadingSeasons = false));
   });
 
-  // Load episodes when season changes
   $effect(() => {
     if (!isTV || selectedSeason === null) return;
     loadingEpisodes = true;
@@ -83,7 +81,6 @@
       .finally(() => (loadingEpisodes = false));
   });
 
-  // Load streams when an episode is selected (TV) or on mount (movie)
   $effect(() => {
     if (isTV) {
       if (!selectedEpisode || selectedSeason === null) return () => {};
@@ -280,7 +277,6 @@
                     <Play class="size-5 text-muted-foreground/50" />
                   </div>
                 {/if}
-                <!-- Play overlay -->
                 <span
                   class="absolute inset-0 flex items-center justify-center bg-black/0 transition-colors group-hover:bg-black/40"
                 >
@@ -423,7 +419,12 @@
             {#each filteredStreams as stream (stream)}
               <button
                 class="group flex w-full flex-col gap-1 rounded-lg border border-border/50 bg-secondary/50 p-3 text-left transition-colors hover:border-border hover:bg-secondary"
-                onclick={() => onPlayStream(stream)}
+                onclick={() =>
+                  onPlayStream(
+                    stream,
+                    selectedSeason ?? undefined,
+                    selectedEpisode?.episode_number,
+                  )}
               >
                 <span class="flex items-center justify-between gap-2">
                   <span class="text-sm font-medium text-foreground"

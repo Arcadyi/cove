@@ -97,21 +97,19 @@
       });
   });
 
-  function playStream(stream: Stream): void {
+  function playStream(stream: Stream, season?: number, episode?: number): void {
     activeStream = stream;
     activeSubtitles = [];
 
-    const params = new URLSearchParams({
-      id: String(media.id),
-      type: media.media_type,
-    });
+    const params = new URLSearchParams({ id: String(media.id), type: media.media_type });
+    if (media.media_type === "tv" && season != null && episode != null) {
+      params.set("season", String(season));
+      params.set("episode", String(episode));
+    }
 
-    //TODO: Add this to api.ts
     fetch(`http://localhost:6969/api/subtitles?${params}`)
       .then((r) => r.json())
-      .then((subs) => {
-        activeSubtitles = Array.isArray(subs) ? subs : [];
-      })
+      .then((subs) => { activeSubtitles = Array.isArray(subs) ? subs : []; })
       .catch(() => {});
   }
 
