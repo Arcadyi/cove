@@ -45,8 +45,6 @@ type Addon struct {
 	Manifest Manifest
 }
 
-var httpClient = &http.Client{}
-
 func (r *ManifestResource) UnmarshalJSON(data []byte) error {
 	// Try string first
 	var name string
@@ -64,18 +62,18 @@ func (r *ManifestResource) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-func addonRequest(url string) (*http.Response, error) {
+func (m *Manager) addonRequest(url string) (*http.Response, error) {
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("User-Agent", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
 	req.Header.Set("Accept", "application/json")
-	return httpClient.Do(req)
+	return m.client.Do(req)
 }
 
-func FetchManifest(addonURL string) (Manifest, error) {
-	res, err := addonRequest(addonURL + "/manifest.json")
+func (m *Manager) FetchManifest(addonURL string) (Manifest, error) {
+	res, err := m.addonRequest(addonURL + "/manifest.json")
 	if err != nil {
 		return Manifest{}, err
 	}
@@ -94,10 +92,10 @@ func FetchManifest(addonURL string) (Manifest, error) {
 	return manifest, nil
 }
 
-func FetchStreams(addonURL string, mediaType string, imdbID string) ([]Stream, error) {
+func (m *Manager) FetchStreams(addonURL string, mediaType string, imdbID string) ([]Stream, error) {
 	url := fmt.Sprintf("%s/stream/%s/%s.json", addonURL, mediaType, imdbID)
 
-	res, err := addonRequest(url)
+	res, err := m.addonRequest(url)
 	if err != nil {
 		return nil, err
 	}
@@ -118,9 +116,9 @@ func FetchStreams(addonURL string, mediaType string, imdbID string) ([]Stream, e
 	return data.Streams, nil
 }
 
-func FetchSubtitles(addonURL string, mediaType string, id string) ([]Subtitle, error) {
+func (m *Manager) FetchSubtitles(addonURL string, mediaType string, id string) ([]Subtitle, error) {
 	url := fmt.Sprintf("%s/subtitles/%s/%s.json", addonURL, mediaType, id)
-	res, err := addonRequest(url)
+	res, err := m.addonRequest(url)
 	if err != nil {
 		return nil, err
 	}
@@ -140,10 +138,10 @@ func FetchSubtitles(addonURL string, mediaType string, id string) ([]Subtitle, e
 	return data.Subtitles, nil
 }
 
-func SetupHandlers() {
+func (m *Manager) SetupHandlers() {
 	http.HandleFunc("/api/addons", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
-		err := json.NewEncoder(w).Encode(GetAddons())
+		err := json.NewEncoder(w).Encode(m.GetAddons())
 		if err != nil {
 			log.Println(err)
 			return
@@ -153,7 +151,7 @@ func SetupHandlers() {
 	http.HandleFunc("/api/addons/add", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		url := r.URL.Query().Get("url")
-		addon, err := AddAddon(url)
+		addon, err := m.AddAddon(url)
 		if err != nil {
 			http.Error(w, "could not fetch addon manifest: "+err.Error(), http.StatusBadRequest)
 			return

@@ -37,3 +37,18 @@ export interface Addon {
  * Fall back to object form
  */
 export type Alias = ManifestResource;
+
+//////////
+// source: manager.go
+
+/**
+ * Manager owns the configured addon registry and the HTTP client used to talk
+ * to addons. This state used to live in package globals; holding it on a struct
+ * lets callers construct independent managers (and tests inject a custom client
+ * or pre-seed the registry). Fields are unexported, so tygo emits nothing for
+ * Manager — only the data types (Manifest, Stream, Subtitle, Addon) cross into
+ * the generated TS.
+ * in memory for now, will move to SQLite later
+ */
+export interface Manager {
+}

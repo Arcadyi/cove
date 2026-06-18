@@ -38,37 +38,44 @@ func main() {
 	// Addon registration is best-effort. A transient network failure reaching
 	// an addon at startup must not prevent the server from booting — the addon
 	// is re-contacted on each stream request and can recover then.
-	if _, err := addons.AddAddon("https://torrentio.strem.fun"); err != nil {
+	addonMgr := addons.New()
+	if _, err := addonMgr.AddAddon("https://torrentio.strem.fun"); err != nil {
 		log.Println("torrentio addon unavailable:", err)
 	}
-	if _, err := addons.AddAddon("https://opensubtitles-v3.strem.io"); err != nil {
+	if _, err := addonMgr.AddAddon("https://opensubtitles-v3.strem.io"); err != nil {
 		log.Println("opensubtitles addon unavailable:", err)
 	}
 
-	if err := settings.InitSettings(); err != nil {
+	st, err := settings.New()
+	if err != nil {
 		log.Println("could not load settings:", err)
 	}
-	if err := library.Init(); err != nil {
+	lib, err := library.New()
+	if err != nil {
 		log.Println("could not load library:", err)
 	}
 
-	addons.SetupHandlers()
-	tmdb.SetupHandlers(apiKey)
-	player.SetupHandlers(apiKey)
-	settings.SetupHandlers()
-	library.SetupHandlers()
+	tmdbClient := tmdb.New(apiKey)
 
 	// The torrent client is core functionality — if it can't start, there's
-	// nothing to stream, so this one stays fatal.
-	if err := player.Init(); err != nil {
+	// nothing to stream, so a New failure is fatal.
+	p, err := player.New(tmdbClient, addonMgr)
+	if err != nil {
 		log.Fatal("could not init torrent client:", err)
 	}
+
+	addonMgr.SetupHandlers()
+	tmdbClient.SetupHandlers(addonMgr)
+	p.SetupHandlers()
+	st.SetupHandlers()
+	lib.SetupHandlers()
 
 	go func() {
 		ticker := time.NewTicker(30 * time.Minute)
 		defer ticker.Stop()
 		for range ticker.C {
-			player.CleanupHLSSessions()
+			p.CleanupHLSSessions()
+			p.CleanupTorrents()
 		}
 	}()
 

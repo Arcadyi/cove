@@ -8,7 +8,6 @@
   import Player from "./components/Player.svelte";
   import * as Tooltip from "$lib/components/ui/tooltip";
   import { Maximize2, X } from "lucide-svelte";
-  import { SvelteURLSearchParams } from "svelte/reactivity";
 
   import type { Page } from "$lib/types/types";
   import QueryPage from "./components/QueryPage.svelte";
@@ -24,6 +23,7 @@
     pickBestStream,
     type StreamSelectionMode,
   } from "$lib/streamSelection";
+  import { api } from "$lib/api";
 
   let query = $state("");
 
@@ -60,9 +60,9 @@
   // stop StreamsList from re-triggering auto-select for the same episode.
   const streamActiveForSelectedMedia = $derived(
     !!playerSession &&
-      !!selectedMedia &&
-      playerSession.media.id === selectedMedia.id &&
-      playerSession.media.media_type === selectedMedia.media_type,
+    !!selectedMedia &&
+    playerSession.media.id === selectedMedia.id &&
+    playerSession.media.media_type === selectedMedia.media_type,
   );
 
   const activePlaybackSeason = $derived(
@@ -78,21 +78,21 @@
   const fullscreenInfo = $derived(
     playerMode === "full" && playerSession
       ? {
-          title:
-            playerSession.media.media_type === "tv"
-              ? playerSession.media.name
-              : playerSession.media.title,
-          subtitle:
-            playerSession.media.media_type === "tv" &&
-            playerSession.season != null &&
-            playerSession.episode != null
-              ? `S${playerSession.season}E${playerSession.episode}${
-                  playerSession.episodeName
-                    ? ` - ${playerSession.episodeName}`
-                    : ""
-                }`
-              : undefined,
-        }
+        title:
+          playerSession.media.media_type === "tv"
+            ? playerSession.media.name
+            : playerSession.media.title,
+        subtitle:
+          playerSession.media.media_type === "tv" &&
+          playerSession.season != null &&
+          playerSession.episode != null
+            ? `S${playerSession.season}E${playerSession.episode}${
+              playerSession.episodeName
+                ? ` - ${playerSession.episodeName}`
+                : ""
+            }`
+            : undefined,
+      }
       : null,
   );
 
@@ -226,17 +226,14 @@
     };
     playerMode = "full";
 
-    const params = new SvelteURLSearchParams({
-      id: String(media.id),
-      type: media.media_type,
-    });
-    if (media.media_type === "tv" && season != null && episode != null) {
-      params.set("season", String(season));
-      params.set("episode", String(episode));
-    }
-
-    fetch(`http://localhost:6969/api/subtitles?${params}`)
-      .then((r) => r.json())
+    api
+      .getSubtitles({
+        id: media.id,
+        type: media.media_type,
+        season: media.media_type === "tv" ? (season ?? undefined) : undefined,
+        episode:
+          media.media_type === "tv" ? (episode ?? undefined) : undefined,
+      })
       .then((subs) => {
         // Guard against a newer playStream call having superseded this one
         // while the fetch was in flight.
@@ -253,10 +250,12 @@
   // Streams often come back empty on the first hit while indexers are still
   // searching — StreamsList handles that by polling every second; quickPlay
   // does the same here rather than giving up after one empty response.
-  async function fetchStreamsWithRetry(url: string): Promise<Stream[]> {
+  async function fetchStreamsWithRetry(
+    fetcher: () => Promise<Stream[]>,
+  ): Promise<Stream[]> {
     for (let attempt = 0; attempt < 15; attempt++) {
       try {
-        const res: Stream[] = await fetch(url).then((r) => r.json());
+        const res = await fetcher();
         if (Array.isArray(res) && res.length > 0) return res;
       } catch (e) {
         console.error("quickPlay: failed to fetch streams", e);
@@ -284,12 +283,14 @@
     const targetSeason = isTV ? (season ?? 1) : undefined;
     const targetEpisode = isTV ? (episode ?? 1) : undefined;
 
-    const API_BASE = "http://localhost:6969";
-    const url = isTV
-      ? `${API_BASE}/api/streams?id=${media.id}&type=tv&season=${targetSeason}&episode=${targetEpisode}`
-      : `${API_BASE}/api/streams?id=${media.id}`;
-
-    const streams = await fetchStreamsWithRetry(url);
+    const streams = await fetchStreamsWithRetry(() =>
+      api.getStreams(
+        media.id,
+        isTV
+          ? { type: "tv", season: targetSeason, episode: targetEpisode }
+          : {},
+      ),
+    );
     if (streams.length === 0) return;
 
     const mode =
@@ -302,9 +303,7 @@
     let episodeName: string | undefined;
     if (isTV) {
       try {
-        const eps: { episode_number: number; name: string }[] = await fetch(
-          `${API_BASE}/api/tv/episodes?id=${media.id}&season=${targetSeason}`,
-        ).then((r) => r.json());
+        const eps = await api.tvEpisodes(media.id, targetSeason!);
         episodeName = eps.find((e) => e.episode_number === targetEpisode)?.name;
       } catch (e) {
         // Non-critical — just means the topbar's subtitle line won't show

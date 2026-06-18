@@ -8,6 +8,16 @@
 // source: player.go
 
 /**
+ * Player owns all of the package's mutable state — the torrent client, the
+ * active-torrent registry, the HLS session table, and the subtitle cache (all
+ * previously package globals) — plus the injected TMDB client and addon
+ * manager that used to be threaded through SetupHandlers. Its methods are split
+ * across player.go and hls.go but all hang off this one type. Fields are
+ * unexported, so tygo emits nothing for Player.
+ */
+export interface Player {
+}
+/**
  * AudioTrackInfo describes a single audio track returned by ffprobe.
  */
 export interface AudioTrackInfo {

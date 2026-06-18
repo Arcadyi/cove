@@ -11,12 +11,34 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 	"unicode"
 
 	"github.com/Arcadyi/cove/internal/addons"
 	"github.com/Arcadyi/cove/internal/utils"
 	"golang.org/x/text/unicode/norm"
 )
+
+// Client talks to the TMDB API. It owns the API key (previously threaded
+// through every function as a parameter) and the HTTP client (previously a
+// package global). Holding both on a struct lets callers construct independent
+// clients and inject a custom HTTP client in tests. Fields are unexported, so
+// tygo emits nothing for Client — only the data types (Media, Details,
+// MediaImages, ...) cross into the generated TS.
+type Client struct {
+	apiKey string
+	client *http.Client
+}
+
+// New returns a TMDB client. The 15s timeout matters because http.DefaultClient
+// has none, so a stalled TMDB response would otherwise hold a request goroutine
+// open forever; TMDB is normally fast, so 15s only trips on a dead connection.
+func New(apiKey string) *Client {
+	return &Client{
+		apiKey: apiKey,
+		client: &http.Client{Timeout: 15 * time.Second},
+	}
+}
 
 type Media struct {
 	ID         int      `json:"id"`
@@ -170,10 +192,10 @@ const baseURL = "https://api.themoviedb.org/3"
 const imageBase = "https://image.tmdb.org/t/p/w500"
 const stillBase = "https://image.tmdb.org/t/p/w300"
 
-func SearchByKeywords(query string, apiKey string) ([]Media, error) {
+func (c *Client) SearchByKeywords(query string) ([]Media, error) {
 	normalized := normalizeQuery(query)
-	kwURL := fmt.Sprintf("%s/search/keyword?api_key=%s&query=%s", baseURL, apiKey, normalized)
-	res, err := http.Get(kwURL)
+	kwURL := fmt.Sprintf("%s/search/keyword?api_key=%s&query=%s", baseURL, c.apiKey, normalized)
+	res, err := c.client.Get(kwURL)
 	if err != nil {
 		return nil, err
 	}
@@ -205,8 +227,8 @@ func SearchByKeywords(query string, apiKey string) ([]Media, error) {
 	var results []Media
 	for _, mediaType := range []string{"movie", "tv"} {
 		discURL := fmt.Sprintf("%s/discover/%s?api_key=%s&with_keywords=%s&sort_by=popularity.desc",
-			baseURL, mediaType, apiKey, kwParam)
-		r, err := http.Get(discURL)
+			baseURL, mediaType, c.apiKey, kwParam)
+		r, err := c.client.Get(discURL)
 		if err != nil {
 			continue
 		}
@@ -272,7 +294,7 @@ func queryVariants(q string) []string {
 	return variants
 }
 
-func Search(query string, apiKey string) ([]Media, error) {
+func (c *Client) Search(query string) ([]Media, error) {
 	variantBoost := []float64{3.0, 1.5, 1.0}
 
 	seen := make(map[int]bool)
@@ -283,8 +305,8 @@ func Search(query string, apiKey string) ([]Media, error) {
 		encoded := neturl.QueryEscape(variant)
 
 		for _, mediaType := range []string{"movie", "tv"} {
-			url := fmt.Sprintf("%s/search/%s?api_key=%s&query=%s", baseURL, mediaType, apiKey, encoded)
-			res, err := http.Get(url)
+			url := fmt.Sprintf("%s/search/%s?api_key=%s&query=%s", baseURL, mediaType, c.apiKey, encoded)
+			res, err := c.client.Get(url)
 			if err != nil {
 				continue
 			}
@@ -329,9 +351,9 @@ func Search(query string, apiKey string) ([]Media, error) {
 }
 
 // GetIMDBId returns the IMDB ID for a movie by TMDB ID.
-func GetIMDBId(tmdbID int, apiKey string) (string, error) {
-	url := fmt.Sprintf("%s/movie/%d?api_key=%s", baseURL, tmdbID, apiKey)
-	res, err := http.Get(url)
+func (c *Client) GetIMDBId(tmdbID int) (string, error) {
+	url := fmt.Sprintf("%s/movie/%d?api_key=%s", baseURL, tmdbID, c.apiKey)
+	res, err := c.client.Get(url)
 	if err != nil {
 		return "", err
 	}
@@ -352,9 +374,9 @@ func GetIMDBId(tmdbID int, apiKey string) (string, error) {
 }
 
 // GetTVIMDBId returns the IMDB ID for a TV show by TMDB ID.
-func GetTVIMDBId(tmdbID int, apiKey string) (string, error) {
-	url := fmt.Sprintf("%s/tv/%d/external_ids?api_key=%s", baseURL, tmdbID, apiKey)
-	res, err := http.Get(url)
+func (c *Client) GetTVIMDBId(tmdbID int) (string, error) {
+	url := fmt.Sprintf("%s/tv/%d/external_ids?api_key=%s", baseURL, tmdbID, c.apiKey)
+	res, err := c.client.Get(url)
 	if err != nil {
 		return "", err
 	}
@@ -373,9 +395,9 @@ func GetTVIMDBId(tmdbID int, apiKey string) (string, error) {
 }
 
 // GetSeasons returns the season list for a TV show (skipping specials season 0).
-func GetSeasons(tmdbID int, apiKey string) ([]TVSeason, error) {
-	url := fmt.Sprintf("%s/tv/%d?api_key=%s", baseURL, tmdbID, apiKey)
-	res, err := http.Get(url)
+func (c *Client) GetSeasons(tmdbID int) ([]TVSeason, error) {
+	url := fmt.Sprintf("%s/tv/%d?api_key=%s", baseURL, tmdbID, c.apiKey)
+	res, err := c.client.Get(url)
 	if err != nil {
 		return nil, err
 	}
@@ -407,9 +429,9 @@ func GetSeasons(tmdbID int, apiKey string) ([]TVSeason, error) {
 }
 
 // GetEpisodes returns the episodes for a specific season of a TV show.
-func GetEpisodes(tmdbID int, seasonNumber int, apiKey string) ([]TVEpisode, error) {
-	url := fmt.Sprintf("%s/tv/%d/season/%d?api_key=%s", baseURL, tmdbID, seasonNumber, apiKey)
-	res, err := http.Get(url)
+func (c *Client) GetEpisodes(tmdbID int, seasonNumber int) ([]TVEpisode, error) {
+	url := fmt.Sprintf("%s/tv/%d/season/%d?api_key=%s", baseURL, tmdbID, seasonNumber, c.apiKey)
+	res, err := c.client.Get(url)
 	if err != nil {
 		return nil, err
 	}
@@ -435,10 +457,10 @@ func GetEpisodes(tmdbID int, seasonNumber int, apiKey string) ([]TVEpisode, erro
 	return data.Episodes, nil
 }
 
-func GetImages(tmdbID int, mediaType string, apiKey string) (*MediaImages, error) {
-	url := fmt.Sprintf("%s/%s/%d/images?api_key=%s", baseURL, mediaType, tmdbID, apiKey)
+func (c *Client) GetImages(tmdbID int, mediaType string) (*MediaImages, error) {
+	url := fmt.Sprintf("%s/%s/%d/images?api_key=%s", baseURL, mediaType, tmdbID, c.apiKey)
 
-	res, err := http.Get(url)
+	res, err := c.client.Get(url)
 	if err != nil {
 		return nil, err
 	}
@@ -469,10 +491,10 @@ func GetImages(tmdbID int, mediaType string, apiKey string) (*MediaImages, error
 	return &data, nil
 }
 
-func GetVideos(tmdbID int, mediaType string, apiKey string) (*MediaVideos, error) {
-	url := fmt.Sprintf("%s/%s/%d/videos?api_key=%s", baseURL, mediaType, tmdbID, apiKey)
+func (c *Client) GetVideos(tmdbID int, mediaType string) (*MediaVideos, error) {
+	url := fmt.Sprintf("%s/%s/%d/videos?api_key=%s", baseURL, mediaType, tmdbID, c.apiKey)
 
-	res, err := http.Get(url)
+	res, err := c.client.Get(url)
 	if err != nil {
 		return nil, err
 	}
@@ -511,10 +533,10 @@ func (m *Media) DisplayDate() string {
 	return m.FirstAir
 }
 
-func GetDetails(tmdbID int, mediaType string, apiKey string) (*Details, error) {
+func (c *Client) GetDetails(tmdbID int, mediaType string) (*Details, error) {
 	url := fmt.Sprintf("%s/%s/%d?api_key=%s&append_to_response=credits,release_dates,content_ratings,keywords,origin_country",
-		baseURL, mediaType, tmdbID, apiKey)
-	res, err := http.Get(url)
+		baseURL, mediaType, tmdbID, c.apiKey)
+	res, err := c.client.Get(url)
 	if err != nil {
 		return nil, err
 	}
@@ -546,9 +568,9 @@ func GetDetails(tmdbID int, mediaType string, apiKey string) (*Details, error) {
 // indistinguishable from a real Media object by type, but quietly missing
 // fields a real one always has — which is exactly how the overview-text bug
 // happened. Every consumer of Media should be able to trust it's complete.
-func GetMediaByID(tmdbID int, mediaType string, apiKey string) (*Media, error) {
-	url := fmt.Sprintf("%s/%s/%d?api_key=%s", baseURL, mediaType, tmdbID, apiKey)
-	res, err := http.Get(url)
+func (c *Client) GetMediaByID(tmdbID int, mediaType string) (*Media, error) {
+	url := fmt.Sprintf("%s/%s/%d?api_key=%s", baseURL, mediaType, tmdbID, c.apiKey)
+	res, err := c.client.Get(url)
 	if err != nil {
 		return nil, err
 	}
@@ -621,9 +643,9 @@ func (d *Details) KeywordNames() []string {
 	return names
 }
 
-func GetSimilar(tmdbID int, mediaType string, apiKey string) ([]Media, error) {
-	url := fmt.Sprintf("%s/%s/%d/recommendations?api_key=%s", baseURL, mediaType, tmdbID, apiKey)
-	res, err := http.Get(url)
+func (c *Client) GetSimilar(tmdbID int, mediaType string) ([]Media, error) {
+	url := fmt.Sprintf("%s/%s/%d/recommendations?api_key=%s", baseURL, mediaType, tmdbID, c.apiKey)
+	res, err := c.client.Get(url)
 	if err != nil {
 		return nil, err
 	}
@@ -657,9 +679,9 @@ func GetSimilar(tmdbID int, mediaType string, apiKey string) ([]Media, error) {
 	return filtered, nil
 }
 
-func GetLogos(tmdbID int, mediaType string, apiKey string) ([]string, error) {
-	url := fmt.Sprintf("%s/%s/%d/images?api_key=%s&include_image_language=en,null", baseURL, mediaType, tmdbID, apiKey)
-	res, err := http.Get(url)
+func (c *Client) GetLogos(tmdbID int, mediaType string) ([]string, error) {
+	url := fmt.Sprintf("%s/%s/%d/images?api_key=%s&include_image_language=en,null", baseURL, mediaType, tmdbID, c.apiKey)
+	res, err := c.client.Get(url)
 	if err != nil {
 		return nil, err
 	}
@@ -690,10 +712,10 @@ func GetLogos(tmdbID int, mediaType string, apiKey string) ([]string, error) {
 	return urls, nil
 }
 
-func SuggestKeywords(query string, apiKey string) ([]Keyword, error) {
+func (c *Client) SuggestKeywords(query string) ([]Keyword, error) {
 	normalized := normalizeQuery(query)
-	url := fmt.Sprintf("%s/search/keyword?api_key=%s&query=%s", baseURL, apiKey, normalized)
-	res, err := http.Get(url)
+	url := fmt.Sprintf("%s/search/keyword?api_key=%s&query=%s", baseURL, c.apiKey, normalized)
+	res, err := c.client.Get(url)
 	if err != nil {
 		return nil, err
 	}
@@ -716,14 +738,14 @@ func SuggestKeywords(query string, apiKey string) ([]Keyword, error) {
 	return data.Results, nil
 }
 
-func SetupHandlers(apiKey string) {
+func (c *Client) SetupHandlers(addonMgr *addons.Manager) {
 	http.HandleFunc("/api/keywords", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		query := r.URL.Query().Get("q")
 		if query == "" {
 			http.Error(w, "missing query", http.StatusBadRequest)
 			return
 		}
-		keywords, err := SuggestKeywords(query, apiKey)
+		keywords, err := c.SuggestKeywords(query)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -741,13 +763,13 @@ func SetupHandlers(apiKey string) {
 			return
 		}
 
-		regular, err := Search(query, apiKey)
+		regular, err := c.Search(query)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 
-		byKeyword, _ := SearchByKeywords(query, apiKey)
+		byKeyword, _ := c.SearchByKeywords(query)
 
 		seen := make(map[string]bool)
 		merged := make([]Media, 0, len(regular)+len(byKeyword))
@@ -790,7 +812,7 @@ func SetupHandlers(apiKey string) {
 			return
 		}
 
-		images, err := GetImages(id, mediaType, apiKey)
+		images, err := c.GetImages(id, mediaType)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -824,7 +846,7 @@ func SetupHandlers(apiKey string) {
 			return
 		}
 
-		videos, err := GetVideos(id, mediaType, apiKey)
+		videos, err := c.GetVideos(id, mediaType)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -861,7 +883,7 @@ func SetupHandlers(apiKey string) {
 			return
 		}
 
-		media, err := GetMediaByID(id, mediaType, apiKey)
+		media, err := c.GetMediaByID(id, mediaType)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -882,7 +904,7 @@ func SetupHandlers(apiKey string) {
 			http.Error(w, "invalid id", http.StatusBadRequest)
 			return
 		}
-		details, err := GetDetails(id, mediaType, apiKey)
+		details, err := c.GetDetails(id, mediaType)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -896,7 +918,7 @@ func SetupHandlers(apiKey string) {
 	http.HandleFunc("/api/similar", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		id, _ := strconv.Atoi(r.URL.Query().Get("id"))
 		mediaType := r.URL.Query().Get("type")
-		results, err := GetSimilar(id, mediaType, apiKey)
+		results, err := c.GetSimilar(id, mediaType)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -918,7 +940,7 @@ func SetupHandlers(apiKey string) {
 			http.Error(w, "invalid id", http.StatusBadRequest)
 			return
 		}
-		logos, err := GetLogos(id, mediaType, apiKey)
+		logos, err := c.GetLogos(id, mediaType)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -937,7 +959,7 @@ func SetupHandlers(apiKey string) {
 			log.Println(err)
 			return
 		}
-		imdbID, err := GetIMDBId(id, apiKey)
+		imdbID, err := c.GetIMDBId(id)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -958,7 +980,7 @@ func SetupHandlers(apiKey string) {
 			http.Error(w, "invalid id", http.StatusBadRequest)
 			return
 		}
-		seasons, err := GetSeasons(id, apiKey)
+		seasons, err := c.GetSeasons(id)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -984,7 +1006,7 @@ func SetupHandlers(apiKey string) {
 			http.Error(w, "invalid season", http.StatusBadRequest)
 			return
 		}
-		episodes, err := GetEpisodes(id, season, apiKey)
+		episodes, err := c.GetEpisodes(id, season)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -1029,11 +1051,11 @@ func SetupHandlers(apiKey string) {
 				sem <- struct{}{}
 				defer func() { <-sem }()
 
-				imdbID, err := GetIMDBId(tmdbID, apiKey)
+				imdbID, err := c.GetIMDBId(tmdbID)
 				if err != nil || imdbID == "" {
 					return
 				}
-				streams, err := addons.GetAllStreams("movie", imdbID)
+				streams, err := addonMgr.GetAllStreams("movie", imdbID)
 				if err != nil || len(streams) == 0 {
 					return
 				}

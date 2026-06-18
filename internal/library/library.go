@@ -74,50 +74,65 @@ type diskStore struct {
 	Progress map[string]*WatchProgress `json:"progress"` // key: progressKey()
 }
 
-// ── Module state ───────────────────────────────────────────────────────────────
-
-var (
-	mu          sync.RWMutex
-	db          diskStore
-	libraryPath string
-)
-
-// ── Init ──────────────────────────────────────────────────────────────────────
-
-// Init loads library.json from the same directory as the binary, creating it
-// with empty maps if it doesn't exist yet.
-func Init() error {
-	ex, err := os.Executable()
-	if err != nil {
-		return err
-	}
-	libraryPath = filepath.Join(filepath.Dir(ex), "library.json")
-
-	raw, err := os.ReadFile(libraryPath)
-	if os.IsNotExist(err) {
-		db = diskStore{
-			Entries:  make(map[string]*LibraryEntry),
-			Progress: make(map[string]*WatchProgress),
-		}
-		return persist()
-	}
-	if err != nil {
-		return err
-	}
-
-	db = diskStore{
-		Entries:  make(map[string]*LibraryEntry),
-		Progress: make(map[string]*WatchProgress),
-	}
-	return json.Unmarshal(raw, &db)
+// Library ── Service ──────────────────────────────────────────────────────────────────
+//
+// Library owns all of the package's mutable state. It used to live in package
+// globals; holding it on a struct lets callers construct (and tests spin up)
+// independent instances, and removes the hidden coupling between Init and the
+// handlers. Fields are unexported on purpose: nothing outside this package
+// touches them, and keeping them unexported means tygo emits nothing for this
+// type — only the JSON data types (LibraryEntry, WatchProgress, diskStore)
+// cross into the generated TS.
+type Library struct {
+	mu   sync.RWMutex
+	db   diskStore
+	path string
 }
 
-func persist() error {
-	raw, err := json.MarshalIndent(db, "", "  ")
+// ── New ────────────────────────────────────────────────────────────────────────
+
+// New loads library.json from the same directory as the binary, creating it
+// with empty maps if it doesn't exist yet. It always returns a usable (non-nil)
+// *Library even on error, so the caller can still register handlers against an
+// empty store rather than crashing — matching the old Init's best-effort
+// behaviour.
+func New() (*Library, error) {
+	l := &Library{
+		db: diskStore{
+			Entries:  make(map[string]*LibraryEntry),
+			Progress: make(map[string]*WatchProgress),
+		},
+	}
+
+	ex, err := os.Executable()
+	if err != nil {
+		return l, err
+	}
+	l.path = filepath.Join(filepath.Dir(ex), "library.json")
+
+	raw, err := os.ReadFile(l.path)
+	if os.IsNotExist(err) {
+		// First run — persist empty maps so the file exists.
+		return l, l.persist()
+	}
+	if err != nil {
+		return l, err
+	}
+
+	// Maps are pre-initialised above, so a successful unmarshal merges into
+	// them and a failure still leaves a usable empty store.
+	if err := json.Unmarshal(raw, &l.db); err != nil {
+		return l, err
+	}
+	return l, nil
+}
+
+func (l *Library) persist() error {
+	raw, err := json.MarshalIndent(l.db, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(libraryPath, raw, 0o644)
+	return utils.AtomicWriteFile(l.path, raw, 0o644)
 }
 
 // ── Key helpers ───────────────────────────────────────────────────────────────
@@ -146,12 +161,12 @@ func newUUID() string {
 
 // ── SetupHandlers ─────────────────────────────────────────────────────────────
 
-func SetupHandlers() {
+func (l *Library) SetupHandlers() {
 	// /api/library/progress must be registered before /api/library/ so Go's mux
 	// matches it as the more-specific fixed path.
-	http.HandleFunc("/api/library/progress", utils.CorsMiddleware(handleProgress))
-	http.HandleFunc("/api/library", utils.CorsMiddleware(handleCollection))
-	http.HandleFunc("/api/library/", utils.CorsMiddleware(handleItem))
+	http.HandleFunc("/api/library/progress", utils.CorsMiddleware(l.handleProgress))
+	http.HandleFunc("/api/library", utils.CorsMiddleware(l.handleCollection))
+	http.HandleFunc("/api/library/", utils.CorsMiddleware(l.handleItem))
 }
 
 // ── Handler: /api/library ─────────────────────────────────────────────────────
@@ -159,7 +174,7 @@ func SetupHandlers() {
 // GET  — list all entries; filter by ?status=watching etc.
 // POST — upsert an entry (idempotent on tmdb_id+media_type)
 
-func handleCollection(w http.ResponseWriter, r *http.Request) {
+func (l *Library) handleCollection(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodOptions:
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
@@ -168,14 +183,14 @@ func handleCollection(w http.ResponseWriter, r *http.Request) {
 
 	case http.MethodGet:
 		statusFilter := r.URL.Query().Get("status")
-		mu.RLock()
-		list := make([]*LibraryEntry, 0, len(db.Entries))
-		for _, e := range db.Entries {
+		l.mu.RLock()
+		list := make([]*LibraryEntry, 0, len(l.db.Entries))
+		for _, e := range l.db.Entries {
 			if statusFilter == "" || e.Status == statusFilter {
 				list = append(list, e)
 			}
 		}
-		mu.RUnlock()
+		l.mu.RUnlock()
 		jsonOK(w, list)
 
 	case http.MethodPost:
@@ -198,13 +213,13 @@ func handleCollection(w http.ResponseWriter, r *http.Request) {
 			body.Status = StatusWatchLater
 		}
 
-		mu.Lock()
+		l.mu.Lock()
 		key := entryKey(body.TmdbID, body.MediaType)
 		now := time.Now()
-		entry, exists := db.Entries[key]
+		entry, exists := l.db.Entries[key]
 		if !exists {
 			entry = &LibraryEntry{ID: newUUID(), AddedAt: now}
-			db.Entries[key] = entry
+			l.db.Entries[key] = entry
 		}
 		entry.TmdbID = body.TmdbID
 		entry.MediaType = body.MediaType
@@ -226,15 +241,15 @@ func handleCollection(w http.ResponseWriter, r *http.Request) {
 		// previously removed. This keeps library_entry_id consistent for a
 		// future Supabase sync where it may be used as a foreign key.
 		if !exists {
-			for _, p := range db.Progress {
+			for _, p := range l.db.Progress {
 				if p.TmdbID == body.TmdbID && p.MediaType == body.MediaType {
 					p.LibraryEntryID = entry.ID
 				}
 			}
 		}
-		err := persist()
+		err := l.persist()
 		result := *entry // copy before unlock
-		mu.Unlock()
+		l.mu.Unlock()
 
 		if err != nil {
 			http.Error(w, "persist failed", http.StatusInternalServerError)
@@ -252,7 +267,7 @@ func handleCollection(w http.ResponseWriter, r *http.Request) {
 // GET  — fetch one progress record by query params
 // POST — upsert a progress record; auto-creates library entry as "watching"
 
-func handleProgress(w http.ResponseWriter, r *http.Request) {
+func (l *Library) handleProgress(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodOptions:
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
@@ -284,9 +299,9 @@ func handleProgress(w http.ResponseWriter, r *http.Request) {
 		}
 
 		pKey := progressKey(tmdbID, mediaType, season, episode)
-		mu.RLock()
-		p := db.Progress[pKey]
-		mu.RUnlock()
+		l.mu.RLock()
+		p := l.db.Progress[pKey]
+		l.mu.RUnlock()
 		// Return null JSON if not found (not a 404 — absence is normal)
 		jsonOK(w, p)
 
@@ -311,12 +326,12 @@ func handleProgress(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		mu.Lock()
+		l.mu.Lock()
 		now := time.Now()
 
 		// Auto-create library entry as "watching" if it doesn't exist yet.
 		eKey := entryKey(body.TmdbID, body.MediaType)
-		entry, exists := db.Entries[eKey]
+		entry, exists := l.db.Entries[eKey]
 		if !exists {
 			entry = &LibraryEntry{
 				ID:          newUUID(),
@@ -330,7 +345,7 @@ func handleProgress(w http.ResponseWriter, r *http.Request) {
 				AddedAt:     now,
 				UpdatedAt:   now,
 			}
-			db.Entries[eKey] = entry
+			l.db.Entries[eKey] = entry
 		}
 
 		// Always update last-watched metadata so resume labels stay current.
@@ -353,7 +368,7 @@ func handleProgress(w http.ResponseWriter, r *http.Request) {
 
 		// Upsert the progress record.
 		pKey := progressKey(body.TmdbID, body.MediaType, body.Season, body.Episode)
-		prog, progExists := db.Progress[pKey]
+		prog, progExists := l.db.Progress[pKey]
 		if !progExists {
 			prog = &WatchProgress{
 				ID:             newUUID(),
@@ -363,7 +378,7 @@ func handleProgress(w http.ResponseWriter, r *http.Request) {
 				Season:         body.Season,
 				Episode:        body.Episode,
 			}
-			db.Progress[pKey] = prog
+			l.db.Progress[pKey] = prog
 		}
 		prog.PositionSeconds = body.PositionSeconds
 		prog.DurationSeconds = body.DurationSeconds
@@ -373,9 +388,9 @@ func handleProgress(w http.ResponseWriter, r *http.Request) {
 		// If the episode/movie was just completed and the entry was "watching",
 		// don't auto-flip to "finished" — user controls that manually.
 
-		err := persist()
+		err := l.persist()
 		result := *prog // copy before unlock
-		mu.Unlock()
+		l.mu.Unlock()
 
 		if err != nil {
 			http.Error(w, "persist failed", http.StatusInternalServerError)
@@ -395,7 +410,7 @@ func handleProgress(w http.ResponseWriter, r *http.Request) {
 // PATCH  /api/library/{id}/{type}/status  — update status field
 // PATCH  /api/library/{id}/{type}/rating  — update rating field (null to clear)
 
-func handleItem(w http.ResponseWriter, r *http.Request) {
+func (l *Library) handleItem(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodOptions {
 		w.Header().Set("Access-Control-Allow-Methods", "GET, DELETE, PATCH, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
@@ -427,15 +442,15 @@ func handleItem(w http.ResponseWriter, r *http.Request) {
 	switch {
 	// ── GET /api/library/{id}/{type} ──────────────────────────────────────────
 	case sub == "" && r.Method == http.MethodGet:
-		mu.RLock()
-		entry := db.Entries[key]
+		l.mu.RLock()
+		entry := l.db.Entries[key]
 		var progList []*WatchProgress
-		for _, p := range db.Progress {
+		for _, p := range l.db.Progress {
 			if p.TmdbID == tmdbID && p.MediaType == mediaType {
 				progList = append(progList, p)
 			}
 		}
-		mu.RUnlock()
+		l.mu.RUnlock()
 		// Only 404 when there is genuinely nothing at all — no entry and no
 		// progress history. An entry-less response with progress records is
 		// valid: it means the user removed the title from their list but their
@@ -451,14 +466,14 @@ func handleItem(w http.ResponseWriter, r *http.Request) {
 
 	// ── DELETE /api/library/{id}/{type} ───────────────────────────────────────
 	case sub == "" && r.Method == http.MethodDelete:
-		mu.Lock()
-		delete(db.Entries, key)
+		l.mu.Lock()
+		delete(l.db.Entries, key)
 		// Deliberately do NOT delete WatchProgress records. The user is only
 		// removing the title from their list, not erasing their watch history.
 		// Progress records are keyed by (tmdb_id, media_type, season, episode)
 		// and will be re-linked to a new entry if the title is added back later.
-		err := persist()
-		mu.Unlock()
+		err := l.persist()
+		l.mu.Unlock()
 		if err != nil {
 			http.Error(w, "persist failed", http.StatusInternalServerError)
 			return
@@ -474,18 +489,18 @@ func handleItem(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "invalid body", http.StatusBadRequest)
 			return
 		}
-		mu.Lock()
-		entry := db.Entries[key]
+		l.mu.Lock()
+		entry := l.db.Entries[key]
 		if entry == nil {
-			mu.Unlock()
+			l.mu.Unlock()
 			http.Error(w, "not found", http.StatusNotFound)
 			return
 		}
 		entry.Status = body.Status
 		entry.UpdatedAt = time.Now()
-		err := persist()
+		err := l.persist()
 		result := *entry
-		mu.Unlock()
+		l.mu.Unlock()
 		if err != nil {
 			http.Error(w, "persist failed", http.StatusInternalServerError)
 			return
@@ -505,18 +520,18 @@ func handleItem(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "rating must be between 0 and 5", http.StatusBadRequest)
 			return
 		}
-		mu.Lock()
-		entry := db.Entries[key]
+		l.mu.Lock()
+		entry := l.db.Entries[key]
 		if entry == nil {
-			mu.Unlock()
+			l.mu.Unlock()
 			http.Error(w, "not found", http.StatusNotFound)
 			return
 		}
 		entry.Rating = body.Rating
 		entry.UpdatedAt = time.Now()
-		err := persist()
+		err := l.persist()
 		result := *entry
-		mu.Unlock()
+		l.mu.Unlock()
 		if err != nil {
 			http.Error(w, "persist failed", http.StatusInternalServerError)
 			return

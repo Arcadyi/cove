@@ -41,3 +41,13 @@ export interface Settings {
   showStreamDetails: boolean; // show codec/resolution badges on stream list
   hideSpoilers: boolean;
 }
+/**
+ * Store ── Service ──────────────────────────────────────────────────────────────────
+ * Store owns the package's mutable state (previously package globals). The
+ * data type is already named Settings, so the service is named Store; New
+ * returns *Store and the handlers hang off it. Fields are unexported, so tygo
+ * emits nothing for Store — only the Settings data type crosses into the
+ * generated TS.
+ */
+export interface Store {
+}

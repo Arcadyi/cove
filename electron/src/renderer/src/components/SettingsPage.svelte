@@ -10,6 +10,7 @@
   import * as Select from "$lib/components/ui/select/index.js";
   import * as Tabs from "$lib/components/ui/tabs/index.js";
   import { STREAM_SELECTION_MODES } from "$lib/streamSelection";
+  import { api } from "$lib/api";
 
   let draft = $state<Settings | null>(null);
   let saved = $state(false);
@@ -82,7 +83,7 @@
     speedTestError = null;
     try {
       const start = performance.now();
-      const res = await fetch("http://localhost:6969/api/speedtest", {
+      const res = await fetch(api.speedtestUrl(), {
         cache: "no-store",
       });
       const blob = await res.blob();
@@ -120,7 +121,7 @@
         <div class="flex items-center justify-between py-3">
           <div>
             <Label for="open-muted" class="text-sm font-medium"
-              >Open videos muted</Label
+            >Open videos muted</Label
             >
             <p class="text-xs text-muted-foreground">
               Start every video with audio muted.
@@ -161,7 +162,7 @@
         <div class="flex items-center justify-between py-3">
           <div>
             <Label for="autoplay" class="text-sm font-medium"
-              >Autoplay next episode</Label
+            >Autoplay next episode</Label
             >
             <p class="text-xs text-muted-foreground">
               Automatically start the next episode when one finishes.
@@ -178,7 +179,7 @@
         <div class="flex items-center justify-between py-3">
           <div>
             <Label for="remember-pos" class="text-sm font-medium"
-              >Remember position</Label
+            >Remember position</Label
             >
             <p class="text-xs text-muted-foreground">
               Resume from where you left off.
@@ -203,7 +204,7 @@
           </div>
           <Select.Root type="single" bind:value={draft.defaultProvider}>
             <Select.Trigger class="w-52"
-              >{providerLabel(draft.defaultProvider)}</Select.Trigger
+            >{providerLabel(draft.defaultProvider)}</Select.Trigger
             >
             <Select.Content>
               {#each PROVIDERS as p}
@@ -217,7 +218,7 @@
         <div class="flex items-center justify-between py-3">
           <div>
             <Label for="prefer-hls" class="text-sm font-medium"
-              >Use HLS pipeline</Label
+            >Use HLS pipeline</Label
             >
             <p class="text-xs text-muted-foreground">
               Re-mux via ffmpeg before playing. Better seek support, higher CPU
@@ -235,7 +236,7 @@
         <div class="flex items-center justify-between py-3">
           <div>
             <Label for="auto-select-stream" class="text-sm font-medium"
-              >Automatically pick best stream</Label
+            >Automatically pick best stream</Label
             >
             <p class="text-xs text-muted-foreground">
               Skip the stream list — start playing immediately when you press
@@ -308,7 +309,7 @@
         <div class="flex items-center justify-between py-3">
           <div>
             <Label for="subs-enabled" class="text-sm font-medium"
-              >Enable subtitles by default</Label
+            >Enable subtitles by default</Label
             >
             <p class="text-xs text-muted-foreground">
               Show subtitles automatically when available.
@@ -325,7 +326,7 @@
         <div class="flex items-center justify-between py-3">
           <div>
             <Label class="text-sm font-medium"
-              >Preferred subtitle language</Label
+            >Preferred subtitle language</Label
             >
             <p class="text-xs text-muted-foreground">
               Auto-select this language when subtitles are available.
@@ -333,7 +334,7 @@
           </div>
           <Select.Root type="single" bind:value={draft.defaultSubtitleLang}>
             <Select.Trigger class="w-36"
-              >{langLabel(draft.defaultSubtitleLang)}</Select.Trigger
+            >{langLabel(draft.defaultSubtitleLang)}</Select.Trigger
             >
             <Select.Content>
               {#each LANGUAGES as l}
@@ -353,7 +354,7 @@
           </div>
           <Select.Root type="single" bind:value={draft.defaultAudioLang}>
             <Select.Trigger class="w-36"
-              >{langLabel(draft.defaultAudioLang)}</Select.Trigger
+            >{langLabel(draft.defaultAudioLang)}</Select.Trigger
             >
             <Select.Content>
               {#each LANGUAGES as l}
@@ -383,7 +384,7 @@
             />
             <span
               class="w-9 text-right text-sm text-muted-foreground tabular-nums"
-              >{draft.subtitleSize}%</span
+            >{draft.subtitleSize}%</span
             >
           </div>
         </div>
@@ -408,7 +409,7 @@
             />
             <span
               class="w-9 text-right text-sm text-muted-foreground tabular-nums"
-              >{draft.subtitlePosition}%</span
+            >{draft.subtitlePosition}%</span
             >
           </div>
         </div>
@@ -417,7 +418,7 @@
         <div class="flex items-center justify-between py-3">
           <div>
             <Label for="subtitle-bg" class="text-sm font-medium"
-              >Subtitle background</Label
+            >Subtitle background</Label
             >
             <p class="text-xs text-muted-foreground">
               Show a dark box behind subtitle text for readability.
@@ -436,7 +437,7 @@
         <div class="flex items-center justify-between py-3">
           <div>
             <Label for="stream-details" class="text-sm font-medium"
-              >Show stream details</Label
+            >Show stream details</Label
             >
             <p class="text-xs text-muted-foreground">
               Display codec, resolution, and size badges on the stream list.
@@ -451,7 +452,7 @@
         <div class="flex items-center justify-between py-3">
           <div>
             <Label for="thumbnail-previes" class="text-sm font-medium"
-              >Hide Spoilers</Label
+            >Hide Spoilers</Label
             >
             <p class="text-xs text-muted-foreground">
               Hide not-seen episode thumbnails, descriptions, and episode names;

@@ -34,8 +34,7 @@
   let {
     query = $bindable(""),
     loading = $bindable(false),
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    onSelectPage = (p: Page) => {},
+    onSelectPage = () => {},
     canGoBack = false,
     onGoBack,
     fullscreenInfo = null,
@@ -97,8 +96,10 @@
     });
   }
 
-  function selectPage(page: string): void {
-    onSelectPage({ type: page });
+  function selectPage(
+    page: Exclude<Page, { type: "mediaView" }>["type"],
+  ): void {
+    onSelectPage({ type: page } as Page);
   }
 
   function openQuery(): void {

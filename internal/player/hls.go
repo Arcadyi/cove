@@ -38,11 +38,6 @@ var browserSafeAudioCodecs = map[string]bool{
 	"aac": true, "mp3": true, "opus": true, "vorbis": true, "flac": true,
 }
 
-var (
-	hlsMu       sync.RWMutex
-	hlsSessions = map[string]*hlsSession{}
-)
-
 func newSessionID() (string, error) {
 	b := make([]byte, 8)
 	if _, err := rand.Read(b); err != nil {
@@ -274,7 +269,7 @@ func (s *hlsSession) startFfmpeg(startSeg int) error {
 //
 // Audio is copied when the codec is already browser-safe (AAC etc.),
 // otherwise transcoded to AAC. Video is always copied.
-func StartHLSSession(input string, tracks []AudioTrackInfo, duration float64, videoCodec string) (string, error) {
+func (p *Player) StartHLSSession(input string, tracks []AudioTrackInfo, duration float64, videoCodec string) (string, error) {
 	id, err := newSessionID()
 	if err != nil {
 		return "", err
@@ -302,9 +297,9 @@ func StartHLSSession(input string, tracks []AudioTrackInfo, duration float64, vi
 		return "", err
 	}
 
-	hlsMu.Lock()
-	hlsSessions[id] = session
-	hlsMu.Unlock()
+	p.hlsMu.Lock()
+	p.hlsSessions[id] = session
+	p.hlsMu.Unlock()
 
 	return id, nil
 }
@@ -433,11 +428,11 @@ func logSegmentTiming(sessionID, fullPath, file string) {
 }
 
 // For segment (.ts) files it waits up to 30 s for ffmpeg to write them before giving up.
-func ServeHLSFile(sessionID, file string, w http.ResponseWriter, r *http.Request) {
+func (p *Player) ServeHLSFile(sessionID, file string, w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Access-Control-Allow-Origin", "*")
-	hlsMu.RLock()
-	session, ok := hlsSessions[sessionID]
-	hlsMu.RUnlock()
+	p.hlsMu.RLock()
+	session, ok := p.hlsSessions[sessionID]
+	p.hlsMu.RUnlock()
 	if !ok {
 		http.Error(w, "hls session not found", http.StatusNotFound)
 		return
@@ -633,13 +628,13 @@ func buildMasterPlaylist(tracks []AudioTrackInfo, videoCodec string) string {
 
 // CleanupHLSSessions kills and removes sessions idle for more than 2 hours.
 // Call this on a ticker from main (e.g. every 30 minutes).
-func CleanupHLSSessions() {
+func (p *Player) CleanupHLSSessions() {
 	cutoff := time.Now().Add(-2 * time.Hour)
 
-	hlsMu.Lock()
-	defer hlsMu.Unlock()
+	p.hlsMu.Lock()
+	defer p.hlsMu.Unlock()
 
-	for id, session := range hlsSessions {
+	for id, session := range p.hlsSessions {
 		session.mu.Lock()
 		idle := session.lastUsed.Before(cutoff)
 		session.mu.Unlock()
@@ -662,7 +657,7 @@ func CleanupHLSSessions() {
 				log.Println(err)
 				continue
 			}
-			delete(hlsSessions, id)
+			delete(p.hlsSessions, id)
 			log.Printf("HLS session %s cleaned up", id)
 		}
 	}
@@ -670,13 +665,13 @@ func CleanupHLSSessions() {
 
 // StopHLSSession immediately kills the ffmpeg process and removes the temp
 // directory for a single session. Safe to call from any goroutine.
-func StopHLSSession(id string) {
-	hlsMu.Lock()
-	session, ok := hlsSessions[id]
+func (p *Player) StopHLSSession(id string) {
+	p.hlsMu.Lock()
+	session, ok := p.hlsSessions[id]
 	if ok {
-		delete(hlsSessions, id)
+		delete(p.hlsSessions, id)
 	}
-	hlsMu.Unlock()
+	p.hlsMu.Unlock()
 
 	if !ok {
 		return

@@ -3,6 +3,16 @@
 //////////
 // source: tmdb.go
 
+/**
+ * Client talks to the TMDB API. It owns the API key (previously threaded
+ * through every function as a parameter) and the HTTP client (previously a
+ * package global). Holding both on a struct lets callers construct independent
+ * clients and inject a custom HTTP client in tests. Fields are unexported, so
+ * tygo emits nothing for Client — only the data types (Media, Details,
+ * MediaImages, ...) cross into the generated TS.
+ */
+export interface Client {
+}
 export interface Media {
   id: number /* int */;
   title: string;

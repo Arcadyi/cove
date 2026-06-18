@@ -107,15 +107,13 @@
 
   // ─── DOM refs ───────────────────────────────────────────────────────────────
 
-  let playerEl = $state<any>(null);
+  let playerEl = $state<HTMLElement | null>(null);
 
   // ─── Source derivations ─────────────────────────────────────────────────────
 
   const isHash = $derived(!src.startsWith("http"));
 
-  const baseInput = $derived(
-    isHash ? `http://localhost:6969/api/play?hash=${src}` : src,
-  );
+  const baseInput = $derived(api.playUrl(src));
 
   const needsHLS = $derived(
     ($settings?.preferHLS ?? false) ||
@@ -140,11 +138,11 @@
 
   const activeStreamURL = $derived.by(() => {
     if (needsHLS && hlsSessionID) {
-      return `http://localhost:6969/api/hls/${hlsSessionID}/master.m3u8`;
+      return api.hlsMasterUrl(hlsSessionID);
     }
     if (!needsHLS && audioTracks.length > 0) {
       // No ffmpeg needed, stream directly
-      return isHash ? `http://localhost:6969/api/play?hash=${src}` : src;
+      return api.playUrl(src);
     }
     return null; // not ready yet (probe still running)
   });
@@ -209,31 +207,22 @@
     appliedAudioAutoSelect = false;
     subtitleProbeReady = false;
 
-    const probeURL = isHash
-      ? `http://localhost:6969/api/probe?hash=${src}`
-      : `http://localhost:6969/api/probe?url=${encodeURIComponent(src)}`;
-
     const controller = new AbortController();
-    fetch(probeURL, { signal: controller.signal })
-      .then((r) => r.json())
-      .then(
-        (data: {
-          audio: AudioTrackInfo[];
-          subtitles: SubtitleTrackInfo[];
-          videoCodec: string;
-          duration: number;
-        }) => {
+    api
+      .probe<{
+        audio: AudioTrackInfo[];
+        subtitles: SubtitleTrackInfo[];
+        videoCodec: string;
+        duration: number;
+      }>(src, controller.signal)
+      .then((data) => {
           audioTracks = data.audio ?? [];
           videoCodec = data.videoCodec ?? "";
           probedDuration = data.duration ?? null;
 
-          const base = isHash
-            ? `http://localhost:6969/api/subtitle/extract?hash=${src}`
-            : `http://localhost:6969/api/subtitle/extract?url=${encodeURIComponent(src)}`;
-
           builtInSubtitles = (data.subtitles ?? []).map((t) => ({
             id: `builtin-${t.index}`,
-            url: `${base}&index=${t.index}`,
+            url: api.subtitleExtractUrl(src, t.index),
             lang: t.language || `track${t.index}`,
             label:
               t.title ||
@@ -290,19 +279,17 @@
 
     const controller = new AbortController();
 
-    fetch("http://localhost:6969/api/hls/start", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        input: baseInput,
-        tracks: audioTracks,
-        duration: probedDuration,
-        videoCodec: videoCodec,
-      }),
-      signal: controller.signal,
-    })
-      .then((r) => r.json())
-      .then((d: { sessionID: string }) => {
+    api
+      .hlsStart(
+        {
+          input: baseInput,
+          tracks: audioTracks,
+          duration: probedDuration,
+          videoCodec: videoCodec,
+        },
+        controller.signal,
+      )
+      .then((d) => {
         createdID = d.sessionID;
         hlsSessionID = d.sessionID;
       })
@@ -318,15 +305,7 @@
     return () => {
       controller.abort();
       if (createdID) {
-        fetch(`http://localhost:6969/api/hls/stop/${createdID}`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/x-www-form-urlencoded",
-          },
-          keepalive: true,
-        }).catch((e) => {
-          console.error("Failed for ID: " + createdID, e);
-        });
+        api.hlsStop(createdID);
       }
     };
   });
@@ -506,10 +485,8 @@
 
   $effect(() => {
     if (!media) return;
-    fetch(
-      `http://localhost:6969/api/logos?id=${media.id}&type=${media.media_type}`,
-    )
-      .then((r) => r.json())
+    api
+      .getLogos(media.id, media.media_type)
       .then((logos: string[]) => {
         if (logos?.length) logoUrl = logos[0];
       });
@@ -534,9 +511,7 @@
   $effect(() => {
     if (!isHash) return () => {};
 
-    const es = new EventSource(
-      `http://localhost:6969/api/progress/stream?hash=${src}`,
-    );
+    const es = new EventSource(api.progressStreamUrl(src));
 
     es.onmessage = (e) => {
       try {
@@ -803,23 +778,13 @@
     }
     const ext = externalSubtitles.find((s) => s.id === id);
     if (ext) {
-      loadSubtitleCues(
-        `http://localhost:6969/api/subtitle-proxy?url=${encodeURIComponent(ext.url)}`,
-      );
+      loadSubtitleCues(api.subtitleProxyUrl(ext.url));
     }
   }
 
   onDestroy(() => {
     if (createdID) {
-      fetch(`http://localhost:6969/api/hls/stop/${createdID}`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/x-www-form-urlencoded",
-        },
-        keepalive: true,
-      }).catch((e) => {
-        console.error("Failed for ID: " + createdID, e);
-      });
+      api.hlsStop(createdID);
     }
   });
 </script>
@@ -1134,7 +1099,7 @@
                             subtitleSettings.offset = 0;
                           }}
                           class="w-full rounded py-0.5 text-center text-xs text-muted-foreground hover:text-foreground"
-                        >Reset</button
+                          >Reset</button
                         >
                       {/if}
                     </div>

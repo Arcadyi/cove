@@ -143,9 +143,9 @@
   $effect(() => {
     if (!isTV) return;
     loadingSeasons = true;
-    fetch(`http://localhost:6969/api/tv/seasons?id=${media.id}`)
-      .then((r) => r.json())
-      .then((data: TVSeason[]) => {
+    api
+      .tvSeasons<TVSeason>(media.id)
+      .then((data) => {
         seasons = data ?? [];
         if (seasons.length > 0 && selectedSeason === null) {
           // Land on whatever's already playing (full or minimized to PiP)
@@ -167,11 +167,9 @@
     episodes = [];
     selectedEpisode = null;
     streams = [];
-    fetch(
-      `http://localhost:6969/api/tv/episodes?id=${media.id}&season=${selectedSeason}`,
-    )
-      .then((r) => r.json())
-      .then((data: TVEpisode[]) => {
+    api
+      .tvEpisodes(media.id, selectedSeason!)
+      .then((data) => {
         episodes = data ?? [];
         // Same idea, one level deeper: jump straight to the episode that's
         // already playing rather than leaving the user on the episode
@@ -266,13 +264,17 @@
   }
 
   async function fetchStreams(): Promise<void> {
-    const API_BASE = "http://localhost:6969";
-    const url = isTV
-      ? `${API_BASE}/api/streams?id=${media.id}&type=tv&season=${selectedSeason}&episode=${selectedEpisode!.episode_number}`
-      : `${API_BASE}/api/streams?id=${media.id}`;
-
-    return await fetch(url)
-      .then((r) => r.json())
+    return await api
+      .getStreams(
+        media.id,
+        isTV
+          ? {
+            type: "tv",
+            season: selectedSeason!,
+            episode: selectedEpisode!.episode_number,
+          }
+          : {},
+      )
       .then((res: Stream[]) => {
         streams = res;
         maxQuality = getMaxQuality(streams);

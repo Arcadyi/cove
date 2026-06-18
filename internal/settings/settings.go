@@ -62,47 +62,59 @@ var defaultSettings = Settings{
 	HideSpoilers:          false,
 }
 
-var (
-	settingsMu     sync.RWMutex
-	cachedSettings Settings
-	settingsPath   string
-)
-
-// initSettings resolves the path for settings.json (next to the binary),
-// loads it if it exists, or writes the defaults.
-func InitSettings() error {
-	ex, err := os.Executable()
-	if err != nil {
-		return err
-	}
-	settingsPath = filepath.Join(filepath.Dir(ex), "settings.json")
-
-	data, err := os.ReadFile(settingsPath)
-	if os.IsNotExist(err) {
-		// First run — persist defaults so the file exists for the user to inspect.
-		cachedSettings = defaultSettings
-		return writeSettings()
-	}
-	if err != nil {
-		return err
-	}
-
-	// Start from defaults so newly-added fields are never zero-valued.
-	cachedSettings = defaultSettings
-	return json.Unmarshal(data, &cachedSettings)
+// Store ── Service ──────────────────────────────────────────────────────────────────
+//
+// Store owns the package's mutable state (previously package globals). The
+// data type is already named Settings, so the service is named Store; New
+// returns *Store and the handlers hang off it. Fields are unexported, so tygo
+// emits nothing for Store — only the Settings data type crosses into the
+// generated TS.
+type Store struct {
+	mu     sync.RWMutex
+	cached Settings
+	path   string
 }
 
-func writeSettings() error {
-	data, err := json.MarshalIndent(cachedSettings, "", "  ")
+// New resolves settings.json (next to the binary) and loads it, or writes the
+// defaults on first run. It always returns a usable (non-nil) *Store even on
+// error, so the caller can register handlers against in-memory defaults rather
+// than crashing.
+func New() (*Store, error) {
+	s := &Store{cached: defaultSettings}
+
+	ex, err := os.Executable()
+	if err != nil {
+		return s, err
+	}
+	s.path = filepath.Join(filepath.Dir(ex), "settings.json")
+
+	data, err := os.ReadFile(s.path)
+	if os.IsNotExist(err) {
+		// First run — persist defaults so the file exists for the user to inspect.
+		return s, s.write()
+	}
+	if err != nil {
+		return s, err
+	}
+
+	// cached already holds defaults, so unmarshalling the file over it means
+	// newly-added fields are never left zero-valued.
+	if err := json.Unmarshal(data, &s.cached); err != nil {
+		return s, err
+	}
+	return s, nil
+}
+
+func (s *Store) write() error {
+	data, err := json.MarshalIndent(s.cached, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(settingsPath, data, 0o644)
+	return utils.AtomicWriteFile(s.path, data, 0o644)
 }
 
 // SetupHandlers registers GET/PUT /api/settings.
-func SetupHandlers() {
-	// GET /api/settings — return current settings
+func (s *Store) SetupHandlers() {
 	http.HandleFunc("/api/settings", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodOptions {
 			w.Header().Set("Access-Control-Allow-Methods", "GET, PUT, OPTIONS")
@@ -111,13 +123,14 @@ func SetupHandlers() {
 			return
 		}
 
+		// GET /api/settings — return current settings
 		if r.Method == http.MethodGet {
-			settingsMu.RLock()
-			s := cachedSettings
-			settingsMu.RUnlock()
+			s.mu.RLock()
+			current := s.cached
+			s.mu.RUnlock()
 
 			w.Header().Set("Content-Type", "application/json")
-			if err := json.NewEncoder(w).Encode(s); err != nil {
+			if err := json.NewEncoder(w).Encode(current); err != nil {
 				log.Println("settings encode:", err)
 			}
 			return
@@ -131,10 +144,10 @@ func SetupHandlers() {
 				return
 			}
 
-			settingsMu.Lock()
-			cachedSettings = incoming
-			err := writeSettings()
-			settingsMu.Unlock()
+			s.mu.Lock()
+			s.cached = incoming
+			err := s.write()
+			s.mu.Unlock()
 
 			if err != nil {
 				log.Println("settings write:", err)
@@ -143,9 +156,9 @@ func SetupHandlers() {
 			}
 
 			w.Header().Set("Content-Type", "application/json")
-			settingsMu.RLock()
-			_ = json.NewEncoder(w).Encode(cachedSettings)
-			settingsMu.RUnlock()
+			s.mu.RLock()
+			_ = json.NewEncoder(w).Encode(s.cached)
+			s.mu.RUnlock()
 			return
 		}
 

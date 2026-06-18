@@ -10,7 +10,7 @@
 
   let {
     query = $bindable(""),
-    loading = $bindable(true),
+    loading = $bindable(false),
     onSelectMedia,
     onSuggested,
     onWatch,
@@ -18,7 +18,7 @@
 
   let results: Media[] = $state([]);
   let keywords: { id: number; name: string }[] = $state([]);
-  let qualityMap = $state<SvelteMap<number, string>>();
+  let qualityMap = new SvelteMap<number, string>();
 
   let resultsTextEl = $state<HTMLElement>();
   let displayQuery = $state("");

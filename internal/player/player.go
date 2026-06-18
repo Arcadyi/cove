@@ -2,6 +2,7 @@ package player
 
 import (
 	"bytes"
+	"container/list"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -22,18 +24,47 @@ import (
 	"golang.org/x/sync/singleflight"
 )
 
-var client *torrent.Client
+// Player owns all of the package's mutable state — the torrent client, the
+// active-torrent registry, the HLS session table, and the subtitle cache (all
+// previously package globals) — plus the injected TMDB client and addon
+// manager that used to be threaded through SetupHandlers. Its methods are split
+// across player.go and hls.go but all hang off this one type. Fields are
+// unexported, so tygo emits nothing for Player.
+type Player struct {
+	client *torrent.Client
 
-var (
-	activeTorrents   = map[string]*torrentState{}
+	activeTorrents   map[string]*torrentState
 	activeTorrentsMu sync.RWMutex
-)
+
+	hlsSessions map[string]*hlsSession
+	hlsMu       sync.RWMutex
+
+	subtitleCacheMu sync.Mutex
+	subtitleLRU     *list.List
+	subtitleCache   map[string]*list.Element
+	subtitleGroup   singleflight.Group
+
+	tmdbClient *tmdb.Client
+	addonMgr   *addons.Manager
+}
+
+// torrentDataDir is where the anacrolix client writes downloaded pieces. The
+// reaper removes per-torrent subdirectories under here when a torrent is
+// dropped, so Init and CleanupTorrents must agree on the path.
+const torrentDataDir = "/tmp/cove-torrents"
 
 type torrentState struct {
 	torrent      *torrent.Torrent
 	lastBytes    int64
 	lastCheck    time.Time
 	speedByteSec int64
+
+	// lastUsed is refreshed whenever something reads the torrent or polls its
+	// progress, and readers counts the live stream handlers attached to it.
+	// The reaper drops a torrent only when readers == 0 AND lastUsed is older
+	// than the idle cutoff, so an actively-watched title is never collected.
+	lastUsed time.Time
+	readers  int
 }
 
 // AudioTrackInfo describes a single audio track returned by ffprobe.
@@ -61,25 +92,29 @@ var imageBasedSubtitleCodecs = map[string]bool{
 	"xsub":              true,
 }
 
-func Init() error {
+// New constructs a Player: it creates the torrent client and stores the
+// injected TMDB client and addon manager. The torrent client is core
+// functionality, so a failure here is returned for the caller to treat as fatal.
+func New(tmdbClient *tmdb.Client, addonMgr *addons.Manager) (*Player, error) {
 	cfg := torrent.NewDefaultClientConfig()
-	cfg.DataDir = "/tmp/cove-torrents"
-	var err error
-	client, err = torrent.NewClient(cfg)
-	return err
+	cfg.DataDir = torrentDataDir
+	client, err := torrent.NewClient(cfg)
+	if err != nil {
+		return nil, err
+	}
+	return &Player{
+		client:         client,
+		activeTorrents: map[string]*torrentState{},
+		hlsSessions:    map[string]*hlsSession{},
+		subtitleLRU:    list.New(),
+		subtitleCache:  map[string]*list.Element{},
+		tmdbClient:     tmdbClient,
+		addonMgr:       addonMgr,
+	}, nil
 }
 
-func getLargestTorrentFile(infoHash string) (*torrent.File, error) {
-	t, _ := client.AddMagnet("magnet:?xt=urn:btih:" + infoHash)
-	<-t.GotInfo()
-
-	activeTorrentsMu.Lock()
-	activeTorrents[infoHash] = &torrentState{
-		torrent:   t,
-		lastCheck: time.Now(),
-	}
-	activeTorrentsMu.Unlock()
-
+// largestFile returns the biggest file in a torrent whose metadata is ready.
+func largestFile(t *torrent.Torrent) (*torrent.File, error) {
 	var largest *torrent.File
 	for _, f := range t.Files() {
 		if largest == nil || f.Length() > largest.Length() {
@@ -92,12 +127,112 @@ func getLargestTorrentFile(infoHash string) (*torrent.File, error) {
 	return largest, nil
 }
 
-func StreamTorrent(infoHash string, w http.ResponseWriter, r *http.Request) {
-	largest, err := getLargestTorrentFile(infoHash)
+// addReader adjusts the live-reader count for a torrent and refreshes its idle
+// timer. delta is +1 when a stream handler opens, -1 when it returns.
+func (p *Player) addReader(infoHash string, delta int) {
+	p.activeTorrentsMu.Lock()
+	if st, ok := p.activeTorrents[infoHash]; ok {
+		st.readers += delta
+		if st.readers < 0 {
+			st.readers = 0
+		}
+		st.lastUsed = time.Now()
+	}
+	p.activeTorrentsMu.Unlock()
+}
+
+func (p *Player) getLargestTorrentFile(infoHash string) (*torrent.File, error) {
+	// Reuse a torrent we've already fetched metadata for. AddMagnet is
+	// idempotent, but reusing also avoids re-running the GotInfo wait and keeps
+	// the idle timer fresh.
+	p.activeTorrentsMu.Lock()
+	if st, ok := p.activeTorrents[infoHash]; ok && st.torrent.Info() != nil {
+		t := st.torrent
+		st.lastUsed = time.Now()
+		p.activeTorrentsMu.Unlock()
+		return largestFile(t)
+	}
+	p.activeTorrentsMu.Unlock()
+
+	t, err := p.client.AddMagnet("magnet:?xt=urn:btih:" + infoHash)
+	if err != nil {
+		return nil, fmt.Errorf("invalid magnet for %s: %w", infoHash, err)
+	}
+
+	// Bound the metadata fetch. A dead swarm never fires GotInfo, and without a
+	// deadline this blocks the request goroutine forever — the original cause
+	// of goroutine pile-up under bad hashes. On timeout we drop the torrent so
+	// it doesn't sit in the client holding resources.
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+	select {
+	case <-t.GotInfo():
+	case <-ctx.Done():
+		t.Drop()
+		return nil, fmt.Errorf("timed out fetching metadata for %s", infoHash)
+	}
+
+	now := time.Now()
+	p.activeTorrentsMu.Lock()
+	p.activeTorrents[infoHash] = &torrentState{
+		torrent:   t,
+		lastCheck: now,
+		lastUsed:  now,
+	}
+	p.activeTorrentsMu.Unlock()
+
+	return largestFile(t)
+}
+
+// CleanupTorrents drops torrents that have no live readers and haven't been
+// touched within the idle cutoff, mirroring CleanupHLSSessions. anacrolix
+// torrents hold open file handles plus on-disk pieces under torrentDataDir;
+// without this they accumulate for the life of the process and eventually
+// fill /tmp. Dropping removes the torrent from the client; we then RemoveAll
+// its data directory to reclaim disk (unlinking is safe even if a handle is
+// briefly still open on Linux).
+func (p *Player) CleanupTorrents() {
+	cutoff := time.Now().Add(-30 * time.Minute)
+
+	type dropped struct {
+		hash string
+		t    *torrent.Torrent
+	}
+	var toDrop []dropped
+
+	p.activeTorrentsMu.Lock()
+	for hash, st := range p.activeTorrents {
+		if st.readers <= 0 && st.lastUsed.Before(cutoff) {
+			toDrop = append(toDrop, dropped{hash, st.torrent})
+			delete(p.activeTorrents, hash)
+		}
+	}
+	p.activeTorrentsMu.Unlock()
+
+	for _, d := range toDrop {
+		name := d.t.Name() // capture before Drop; valid once metadata is known
+		d.t.Drop()
+		if name != "" {
+			if err := os.RemoveAll(filepath.Join(torrentDataDir, name)); err != nil {
+				log.Printf("torrent %s: could not remove data: %v", d.hash, err)
+			}
+		}
+		log.Printf("torrent %s dropped (idle)", d.hash)
+	}
+}
+
+func (p *Player) StreamTorrent(infoHash string, w http.ResponseWriter, r *http.Request) {
+	largest, err := p.getLargestTorrentFile(infoHash)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
 	}
+
+	// Mark the torrent as in-use for as long as this handler streams. The
+	// reaper will not drop a torrent with readers > 0, so a long-running
+	// ffmpeg read (the HLS pipeline holds one open continuously) is protected.
+	p.addReader(infoHash, +1)
+	defer p.addReader(infoHash, -1)
 
 	reader := largest.NewReader()
 	// Closing the reader matters a lot here. Every ffmpeg (re)start on a seek
@@ -194,30 +329,63 @@ func ProbeAll(mediaURL string) ([]AudioTrackInfo, []SubtitleTrackInfo, string, f
 
 // ExtractSubtitle extracts a single subtitle track and serves it as WebVTT.
 // Results are cached so repeated requests don't re-run ffmpeg.
-var (
-	subtitleCacheMu sync.RWMutex
-	subtitleCache   = map[string][]byte{}
-	subtitleGroup   singleflight.Group
-)
+
+// maxSubtitleCacheEntries bounds the in-memory VTT cache. Extracted subtitles
+// are small (tens to a few hundred KB), but the old unbounded map grew one
+// entry per (file, track) for the life of the process. An LRU with a modest
+// cap keeps the hot set without leaking.
+const maxSubtitleCacheEntries = 64
+
+type subtitleEntry struct {
+	key  string
+	data []byte
+}
 
 func subtitleCacheKey(input string, index int) string {
 	return fmt.Sprintf("%s::sub::%d", input, index)
 }
 
-func ExtractSubtitle(input string, subtitleIndex int, w http.ResponseWriter) {
+func (p *Player) subtitleCacheGet(key string) ([]byte, bool) {
+	p.subtitleCacheMu.Lock()
+	defer p.subtitleCacheMu.Unlock()
+	el, ok := p.subtitleCache[key]
+	if !ok {
+		return nil, false
+	}
+	p.subtitleLRU.MoveToFront(el)
+	return el.Value.(*subtitleEntry).data, true
+}
+
+func (p *Player) subtitleCachePut(key string, data []byte) {
+	p.subtitleCacheMu.Lock()
+	defer p.subtitleCacheMu.Unlock()
+	if el, ok := p.subtitleCache[key]; ok {
+		el.Value.(*subtitleEntry).data = data
+		p.subtitleLRU.MoveToFront(el)
+		return
+	}
+	p.subtitleCache[key] = p.subtitleLRU.PushFront(&subtitleEntry{key: key, data: data})
+	for p.subtitleLRU.Len() > maxSubtitleCacheEntries {
+		oldest := p.subtitleLRU.Back()
+		if oldest == nil {
+			break
+		}
+		p.subtitleLRU.Remove(oldest)
+		delete(p.subtitleCache, oldest.Value.(*subtitleEntry).key)
+	}
+}
+
+func (p *Player) ExtractSubtitle(input string, subtitleIndex int, w http.ResponseWriter) {
 	key := subtitleCacheKey(input, subtitleIndex)
 
-	subtitleCacheMu.RLock()
-	cached, ok := subtitleCache[key]
-	subtitleCacheMu.RUnlock()
-	if ok {
+	if cached, ok := p.subtitleCacheGet(key); ok {
 		w.Header().Set("Content-Type", "text/vtt; charset=utf-8")
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Write(cached)
 		return
 	}
 
-	result, err, _ := subtitleGroup.Do(key, func() (interface{}, error) {
+	result, err, _ := p.subtitleGroup.Do(key, func() (interface{}, error) {
 		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 		defer cancel()
 		cmd := exec.CommandContext(ctx, "ffmpeg",
@@ -229,9 +397,7 @@ func ExtractSubtitle(input string, subtitleIndex int, w http.ResponseWriter) {
 		if err != nil {
 			return nil, err
 		}
-		subtitleCacheMu.Lock()
-		subtitleCache[key] = out
-		subtitleCacheMu.Unlock()
+		p.subtitleCachePut(key, out)
 		return out, nil
 	})
 
@@ -292,11 +458,11 @@ func StreamWithAudio(input string, audioIndex int, w http.ResponseWriter, r *htt
 	http.ServeContent(w, r, "stream.mp4", time.Time{}, f)
 }
 
-func GetProgress(infoHash string) map[string]interface{} {
-	activeTorrentsMu.Lock()
-	state, ok := activeTorrents[infoHash]
+func (p *Player) GetProgress(infoHash string) map[string]interface{} {
+	p.activeTorrentsMu.Lock()
+	state, ok := p.activeTorrents[infoHash]
 	if !ok {
-		activeTorrentsMu.Unlock()
+		p.activeTorrentsMu.Unlock()
 		return map[string]interface{}{"found": false}
 	}
 
@@ -309,8 +475,9 @@ func GetProgress(infoHash string) map[string]interface{} {
 	}
 	state.lastBytes = currentBytes
 	state.lastCheck = now
+	state.lastUsed = now // progress is polled during playback: acts as a keepalive
 	t := state.torrent
-	activeTorrentsMu.Unlock()
+	p.activeTorrentsMu.Unlock()
 
 	info := t.Info()
 	if info == nil {
@@ -355,7 +522,7 @@ func NewServer(addr string) *http.Server {
 	}
 }
 
-func SetupHandlers(apiKey string) {
+func (p *Player) SetupHandlers() {
 	http.HandleFunc("/api/subtitles", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		tmdbID := r.URL.Query().Get("id")
 		mediaType := r.URL.Query().Get("type")
@@ -368,9 +535,9 @@ func SetupHandlers(apiKey string) {
 		var imdbID string
 		var err error
 		if mediaType == "tv" {
-			imdbID, err = tmdb.GetTVIMDBId(id, apiKey)
+			imdbID, err = p.tmdbClient.GetTVIMDBId(id)
 		} else {
-			imdbID, err = tmdb.GetIMDBId(id, apiKey)
+			imdbID, err = p.tmdbClient.GetIMDBId(id)
 		}
 		if err != nil || imdbID == "" {
 			http.Error(w, "could not get IMDB id", http.StatusInternalServerError)
@@ -387,8 +554,8 @@ func SetupHandlers(apiKey string) {
 		}
 
 		var allSubs []addons.Subtitle
-		for _, addon := range addons.GetAddons() {
-			subs, err := addons.FetchSubtitles(addon.URL, mediaType, stremioID)
+		for _, addon := range p.addonMgr.GetAddons() {
+			subs, err := p.addonMgr.FetchSubtitles(addon.URL, mediaType, stremioID)
 			if err != nil {
 				continue
 			}
@@ -423,9 +590,9 @@ func SetupHandlers(apiKey string) {
 		// Resolve IMDB ID based on media type
 		var imdbID string
 		if mediaType == "tv" {
-			imdbID, err = tmdb.GetTVIMDBId(id, apiKey)
+			imdbID, err = p.tmdbClient.GetTVIMDBId(id)
 		} else {
-			imdbID, err = tmdb.GetIMDBId(id, apiKey)
+			imdbID, err = p.tmdbClient.GetIMDBId(id)
 		}
 		if err != nil || imdbID == "" {
 			http.Error(w, "could not get IMDB id", http.StatusInternalServerError)
@@ -444,7 +611,7 @@ func SetupHandlers(apiKey string) {
 			stremioID = fmt.Sprintf("%s:%s:%s", imdbID, season, episode)
 		}
 
-		streams, err := addons.GetAllStreams(mediaType, stremioID)
+		streams, err := p.addonMgr.GetAllStreams(mediaType, stremioID)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -514,7 +681,7 @@ func SetupHandlers(apiKey string) {
 			http.Error(w, "missing hash or url", http.StatusBadRequest)
 			return
 		}
-		ExtractSubtitle(input, index, w)
+		p.ExtractSubtitle(input, index, w)
 	}))
 
 	http.HandleFunc("/api/play", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
@@ -547,7 +714,7 @@ func SetupHandlers(apiKey string) {
 		}
 
 		if infoHash != "" {
-			StreamTorrent(infoHash, w, r)
+			p.StreamTorrent(infoHash, w, r)
 			return
 		}
 
@@ -566,7 +733,7 @@ func SetupHandlers(apiKey string) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		sessionID, err := StartHLSSession(body.Input, body.Tracks, body.Duration, body.VideoCodec)
+		sessionID, err := p.StartHLSSession(body.Input, body.Tracks, body.Duration, body.VideoCodec)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -594,7 +761,7 @@ func SetupHandlers(apiKey string) {
 				http.Error(w, "missing session ID", http.StatusBadRequest)
 				return
 			}
-			StopHLSSession(sessionID)
+			p.StopHLSSession(sessionID)
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
@@ -604,7 +771,7 @@ func SetupHandlers(apiKey string) {
 			http.Error(w, "invalid path", http.StatusBadRequest)
 			return
 		}
-		ServeHLSFile(parts[0], parts[1], w, r)
+		p.ServeHLSFile(parts[0], parts[1], w, r)
 	}))
 
 	// GET /api/hls/{sessionID}/{file} — serves master playlist, sub-playlists, and segments
@@ -614,13 +781,13 @@ func SetupHandlers(apiKey string) {
 			http.Error(w, "invalid path", http.StatusBadRequest)
 			return
 		}
-		ServeHLSFile(parts[0], parts[1], w, r)
+		p.ServeHLSFile(parts[0], parts[1], w, r)
 	}))
 
 	// Legacy polling endpoint — kept for compatibility; prefer /api/progress/stream (SSE).
 	http.HandleFunc("/api/progress", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		hash := r.URL.Query().Get("hash")
-		err := json.NewEncoder(w).Encode(GetProgress(hash))
+		err := json.NewEncoder(w).Encode(p.GetProgress(hash))
 		if err != nil {
 			log.Println(err)
 		}
@@ -647,7 +814,7 @@ func SetupHandlers(apiKey string) {
 			case <-r.Context().Done():
 				return
 			case <-ticker.C:
-				data, _ := json.Marshal(GetProgress(hash))
+				data, _ := json.Marshal(p.GetProgress(hash))
 				fmt.Fprintf(w, "data: %s\n\n", data)
 				flusher.Flush()
 			}
