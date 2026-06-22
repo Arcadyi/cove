@@ -151,6 +151,49 @@ type searchResponse struct {
 	Results []Media `json:"results"`
 }
 
+// Person is a /search/person result. KnownFor carries a few representative
+// titles TMDB attaches to the person, so a search for "Jackie Chan" can surface
+// his films alongside the person entry itself.
+type Person struct {
+	ID                 int     `json:"id"`
+	Name               string  `json:"name"`
+	ProfileURL         string  `json:"profile_path"`
+	KnownForDepartment string  `json:"known_for_department"`
+	Popularity         float64 `json:"popularity"`
+	KnownFor           []Media `json:"known_for"`
+}
+
+// Provider is a streaming/rental service from /watch/providers. TMDB has no
+// name-search for providers, so SearchProviders fetches the regional directory
+// and filters by name.
+type Provider struct {
+	ID       int    `json:"provider_id"`
+	Name     string `json:"provider_name"`
+	LogoURL  string `json:"logo_path"`
+	Priority int    `json:"display_priority"`
+}
+
+// SearchResults is the sectioned payload for /api/search/multi.
+type SearchResults struct {
+	Movies    []Media    `json:"movies"`
+	TV        []Media    `json:"tv"`
+	People    []Person   `json:"people"`
+	Providers []Provider `json:"providers"`
+}
+
+// PersonDetails is the full /person/{id} payload used by the person overlay:
+// biography plus a deduped, popularity-sorted filmography (combined_credits).
+type PersonDetails struct {
+	ID                 int     `json:"id"`
+	Name               string  `json:"name"`
+	Biography          string  `json:"biography"`
+	ProfileURL         string  `json:"profile_path"`
+	KnownForDepartment string  `json:"known_for_department"`
+	Birthday           string  `json:"birthday"`
+	PlaceOfBirth       string  `json:"place_of_birth"`
+	Credits            []Media `json:"credits"`
+}
+
 type Keyword struct {
 	ID   int    `json:"id"`
 	Name string `json:"name"`
@@ -354,6 +397,247 @@ func (c *Client) Search(query string) ([]Media, error) {
 		merged[i] = s.media
 	}
 	return merged, nil
+}
+
+// SearchPeople finds people by name and returns each with their representative
+// titles (poster + profile URLs absolutised, non-movie/tv known-for dropped).
+func (c *Client) SearchPeople(query string) ([]Person, error) {
+	encoded := neturl.QueryEscape(normalizeQuery(query))
+	url := fmt.Sprintf("%s/search/person?api_key=%s&query=%s", baseURL, c.apiKey, encoded)
+	res, err := c.client.Get(url)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = res.Body.Close() }()
+
+	var data struct {
+		Results []Person `json:"results"`
+	}
+	if err := json.NewDecoder(res.Body).Decode(&data); err != nil {
+		return nil, err
+	}
+
+	people := make([]Person, 0, len(data.Results))
+	for _, p := range data.Results {
+		if p.ProfileURL == "" {
+			continue // faceless entries are usually noise
+		}
+		p.ProfileURL = imageBase + p.ProfileURL
+
+		kf := make([]Media, 0, len(p.KnownFor))
+		for _, m := range p.KnownFor {
+			if (m.MediaType != "movie" && m.MediaType != "tv") || m.PosterURL == "" {
+				continue
+			}
+			m.PosterURL = imageBase + m.PosterURL
+			kf = append(kf, m)
+		}
+		p.KnownFor = kf
+		people = append(people, p)
+	}
+	return people, nil
+}
+
+// SearchProviders matches streaming/rental services by name. TMDB exposes no
+// provider name-search, so we pull the US movie+tv provider directories and
+// filter locally. Region is fixed to US for now.
+func (c *Client) SearchProviders(query string) ([]Provider, error) {
+	q := strings.ToLower(strings.TrimSpace(query))
+	if q == "" {
+		return nil, nil
+	}
+
+	seen := make(map[int]bool)
+	var out []Provider
+	for _, mediaType := range []string{"movie", "tv"} {
+		url := fmt.Sprintf("%s/watch/providers/%s?api_key=%s&language=en-US&watch_region=US",
+			baseURL, mediaType, c.apiKey)
+		res, err := c.client.Get(url)
+		if err != nil {
+			continue
+		}
+		var data struct {
+			Results []Provider `json:"results"`
+		}
+		err = json.NewDecoder(res.Body).Decode(&data)
+		_ = res.Body.Close()
+		if err != nil {
+			continue
+		}
+		for _, p := range data.Results {
+			if seen[p.ID] || !strings.Contains(strings.ToLower(p.Name), q) {
+				continue
+			}
+			seen[p.ID] = true
+			if p.LogoURL != "" {
+				p.LogoURL = imageBase + p.LogoURL
+			}
+			out = append(out, p)
+		}
+	}
+
+	sort.Slice(out, func(i, j int) bool { return out[i].Priority < out[j].Priority })
+	if len(out) > 12 {
+		out = out[:12]
+	}
+	return out, nil
+}
+
+// MultiSearch fans out across titles, people, and providers and returns them in
+// separate sections. Titles reuse the scored Search + keyword merge, split by
+// media type so relevance order is preserved within each section.
+func (c *Client) MultiSearch(query string) (SearchResults, error) {
+	regular, err := c.Search(query)
+	if err != nil {
+		return SearchResults{}, err
+	}
+	byKeyword, _ := c.SearchByKeywords(query)
+
+	seen := make(map[string]bool)
+	movies, tv := []Media{}, []Media{}
+	add := func(m Media) {
+		key := fmt.Sprintf("%d-%s", m.ID, m.MediaType)
+		if seen[key] {
+			return
+		}
+		seen[key] = true
+		if m.MediaType == "tv" {
+			tv = append(tv, m)
+		} else {
+			movies = append(movies, m)
+		}
+	}
+	for _, m := range regular {
+		add(m)
+	}
+	for _, m := range byKeyword {
+		add(m)
+	}
+
+	// People and providers are best-effort: a failure in either shouldn't sink
+	// the whole search. Coerce nils so each section marshals as [] not null.
+	people, _ := c.SearchPeople(query)
+	if people == nil {
+		people = []Person{}
+	}
+	providers, _ := c.SearchProviders(query)
+	if providers == nil {
+		providers = []Provider{}
+	}
+
+	return SearchResults{Movies: movies, TV: tv, People: people, Providers: providers}, nil
+}
+
+// GetPerson returns a person's bio and their filmography (combined credits),
+// deduped, movie/tv only, sorted by popularity and capped.
+func (c *Client) GetPerson(id int) (PersonDetails, error) {
+	url := fmt.Sprintf("%s/person/%d?api_key=%s&append_to_response=combined_credits",
+		baseURL, id, c.apiKey)
+	res, err := c.client.Get(url)
+	if err != nil {
+		return PersonDetails{}, err
+	}
+	defer func() { _ = res.Body.Close() }()
+
+	var data struct {
+		ID                 int    `json:"id"`
+		Name               string `json:"name"`
+		Biography          string `json:"biography"`
+		ProfilePath        string `json:"profile_path"`
+		KnownForDepartment string `json:"known_for_department"`
+		Birthday           string `json:"birthday"`
+		PlaceOfBirth       string `json:"place_of_birth"`
+		CombinedCredits    struct {
+			Cast []Media `json:"cast"`
+		} `json:"combined_credits"`
+	}
+	if err := json.NewDecoder(res.Body).Decode(&data); err != nil {
+		return PersonDetails{}, err
+	}
+
+	pd := PersonDetails{
+		ID:                 data.ID,
+		Name:               data.Name,
+		Biography:          data.Biography,
+		KnownForDepartment: data.KnownForDepartment,
+		Birthday:           data.Birthday,
+		PlaceOfBirth:       data.PlaceOfBirth,
+		Credits:            []Media{},
+	}
+	if data.ProfilePath != "" {
+		pd.ProfileURL = imageBase + data.ProfilePath
+	}
+
+	seen := make(map[int]bool)
+	for _, m := range data.CombinedCredits.Cast {
+		if (m.MediaType != "movie" && m.MediaType != "tv") || m.PosterURL == "" || seen[m.ID] {
+			continue
+		}
+		seen[m.ID] = true
+		m.PosterURL = imageBase + m.PosterURL
+		pd.Credits = append(pd.Credits, m)
+	}
+	sort.Slice(pd.Credits, func(i, j int) bool {
+		return pd.Credits[i].Popularity > pd.Credits[j].Popularity
+	})
+	if len(pd.Credits) > 24 {
+		pd.Credits = pd.Credits[:24]
+	}
+	return pd, nil
+}
+
+// DiscoverByProvider lists popular titles of one media type available on a
+// watch provider. Region is fixed to US (providers are region-specific).
+func (c *Client) DiscoverByProvider(mediaType string, providerID, limit int) ([]Media, error) {
+	if mediaType != "movie" && mediaType != "tv" {
+		mediaType = "movie"
+	}
+	url := fmt.Sprintf("%s/discover/%s?api_key=%s&watch_region=US&with_watch_providers=%d&sort_by=popularity.desc",
+		baseURL, mediaType, c.apiKey, providerID)
+	res, err := c.client.Get(url)
+	if err != nil {
+		return nil, err
+	}
+	var data searchResponse
+	err = json.NewDecoder(res.Body).Decode(&data)
+	_ = res.Body.Close()
+	if err != nil {
+		return nil, err
+	}
+
+	out := make([]Media, 0, len(data.Results))
+	for i := range data.Results {
+		if data.Results[i].PosterURL == "" {
+			continue
+		}
+		data.Results[i].PosterURL = imageBase + data.Results[i].PosterURL
+		data.Results[i].MediaType = mediaType
+		out = append(out, data.Results[i])
+		if limit > 0 && len(out) >= limit {
+			break
+		}
+	}
+	return out, nil
+}
+
+// ProviderTitles blends a provider's popular movies and TV into one
+// popularity-sorted list.
+func (c *Client) ProviderTitles(providerID, limit int) ([]Media, error) {
+	var all []Media
+	for _, mt := range []string{"movie", "tv"} {
+		list, err := c.DiscoverByProvider(mt, providerID, limit)
+		if err == nil {
+			all = append(all, list...)
+		}
+	}
+	sort.Slice(all, func(i, j int) bool { return all[i].Popularity > all[j].Popularity })
+	if limit > 0 && len(all) > limit {
+		all = all[:limit]
+	}
+	if all == nil {
+		all = []Media{}
+	}
+	return all, nil
 }
 
 // GetIMDBId returns the IMDB ID for a movie by TMDB ID.
@@ -923,6 +1207,68 @@ func (c *Client) SetupHandlers(addonMgr *addons.Manager) {
 
 		w.Header().Set("Content-Type", "application/json")
 		if err := json.NewEncoder(w).Encode(merged); err != nil {
+			log.Println(err)
+		}
+	}))
+
+	// GET /api/search/multi?q=<query> — sectioned results (titles split into
+	// movies/tv, plus people and providers).
+	http.HandleFunc("/api/search/multi", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		query := r.URL.Query().Get("q")
+		if query == "" {
+			http.Error(w, "missing query", http.StatusBadRequest)
+			return
+		}
+
+		results, err := c.MultiSearch(query)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(results); err != nil {
+			log.Println(err)
+		}
+	}))
+
+	// GET /api/person?id=<personID> — bio + filmography for the person overlay.
+	http.HandleFunc("/api/person", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		id, err := strconv.Atoi(r.URL.Query().Get("id"))
+		if err != nil {
+			http.Error(w, "invalid id", http.StatusBadRequest)
+			return
+		}
+		person, err := c.GetPerson(id)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(person); err != nil {
+			log.Println(err)
+		}
+	}))
+
+	// GET /api/provider?id=<providerID>&limit=<n> — popular titles on a provider
+	// (US region). Blends movies and TV.
+	http.HandleFunc("/api/provider", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		id, err := strconv.Atoi(r.URL.Query().Get("id"))
+		if err != nil {
+			http.Error(w, "invalid id", http.StatusBadRequest)
+			return
+		}
+		limit := 40
+		if l, err := strconv.Atoi(r.URL.Query().Get("limit")); err == nil && l > 0 {
+			limit = l
+		}
+		titles, err := c.ProviderTitles(id, limit)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(titles); err != nil {
 			log.Println(err)
 		}
 	}))

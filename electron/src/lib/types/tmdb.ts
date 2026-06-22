@@ -124,6 +124,53 @@ export interface Details {
     still_path: string;
   };
 }
+/**
+ * Person is a /search/person result. KnownFor carries a few representative
+ * titles TMDB attaches to the person, so a search for "Jackie Chan" can surface
+ * his films alongside the person entry itself.
+ */
+export interface Person {
+  id: number /* int */;
+  name: string;
+  profile_path: string;
+  known_for_department: string;
+  popularity: number /* float64 */;
+  known_for: Media[];
+}
+/**
+ * Provider is a streaming/rental service from /watch/providers. TMDB has no
+ * name-search for providers, so SearchProviders fetches the regional directory
+ * and filters by name.
+ */
+export interface Provider {
+  provider_id: number /* int */;
+  provider_name: string;
+  logo_path: string;
+  display_priority: number /* int */;
+}
+/**
+ * SearchResults is the sectioned payload for /api/search/multi.
+ */
+export interface SearchResults {
+  movies: Media[];
+  tv: Media[];
+  people: Person[];
+  providers: Provider[];
+}
+/**
+ * PersonDetails is the full /person/{id} payload used by the person overlay:
+ * biography plus a deduped, popularity-sorted filmography (combined_credits).
+ */
+export interface PersonDetails {
+  id: number /* int */;
+  name: string;
+  biography: string;
+  profile_path: string;
+  known_for_department: string;
+  birthday: string;
+  place_of_birth: string;
+  credits: Media[];
+}
 export interface Keyword {
   id: number /* int */;
   name: string;

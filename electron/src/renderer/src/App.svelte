@@ -2,7 +2,11 @@
   import TopBar from "./components/TopBar.svelte";
   import { ModeWatcher } from "mode-watcher";
   import MediaExpandedModal from "./components/MediaExpandedModal.svelte";
+  import PersonExpandedModal from "./components/modals/PersonExpandedModal.svelte";
+  import ProviderExpandedModal from "./components/modals/ProviderExpandedModal.svelte";
+  import UpdateGate from "./components/UpdateGate.svelte";
   import type { Media } from "$lib/types/tmdb";
+  import type { Person, Provider } from "$lib/api";
   import type { Stream } from "$lib/types/addons";
   import Player from "./components/Player.svelte";
   import * as Tooltip from "$lib/components/ui/tooltip";
@@ -32,6 +36,11 @@
   // floats over whatever page is underneath, Netflix-style. Cards request it
   // via the "openMediaDetail" context provided below.
   let selectedMedia: Media | null = $state(null);
+
+  // Person / provider detail overlays, opened from search result cards. Same
+  // floating-overlay model as selectedMedia.
+  let selectedPerson: Person | null = $state(null);
+  let selectedProvider: Provider | null = $state(null);
 
   let loading = $state(false);
 
@@ -102,6 +111,35 @@
   // Load settings once on startup so all components have values immediately.
   onMount(() => {
     settings.load();
+
+    // The media player (vidstack/maverick) aborts internal signals when its
+    // element unmounts — closing the detail modal, re-keying it, or swapping it
+    // for the person/provider overlay while a trailer is still loading. Those
+    // surface as uncaught AbortErrors that are safe to ignore: an abort is an
+    // intentional cancellation, not a failure. We match on name *and* message
+    // (the dispose path can surface the abort without a clean name) and cover
+    // both rejection and error events.
+    const isAbort = (v: unknown): boolean => {
+      const r = v as { name?: string; message?: string } | null | undefined;
+      return (
+        r?.name === "AbortError" ||
+        (typeof r?.message === "string" && /abort/i.test(r.message))
+      );
+    };
+    const onRejection = (e: PromiseRejectionEvent) => {
+      if (isAbort(e.reason)) e.preventDefault();
+    };
+    const onError = (e: ErrorEvent) => {
+      if (isAbort(e.error) || /aborted without reason/i.test(e.message ?? "")) {
+        e.preventDefault();
+      }
+    };
+    window.addEventListener("unhandledrejection", onRejection);
+    window.addEventListener("error", onError);
+    return () => {
+      window.removeEventListener("unhandledrejection", onRejection);
+      window.removeEventListener("error", onError);
+    };
   });
 
   function changePage(page: Page): void {
@@ -423,6 +461,37 @@
       />
     {/key}
   {/if}
+
+  {#if selectedPerson}
+    {#key selectedPerson.id}
+      <PersonExpandedModal
+        person={selectedPerson}
+        onclose={() => (selectedPerson = null)}
+        onselect={(m) => {
+          selectedPerson = null;
+          selectMedia(m);
+        }}
+      />
+    {/key}
+  {/if}
+
+  {#if selectedProvider}
+    {#key selectedProvider.provider_id}
+      <ProviderExpandedModal
+        provider={selectedProvider}
+        onclose={() => (selectedProvider = null)}
+        onselect={(m) => {
+          selectedProvider = null;
+          selectMedia(m);
+        }}
+      />
+    {/key}
+  {/if}
+
+  <!-- Blocking auto-update gate — sits above everything (z-100), hidden until
+       an update is actually found. -->
+  <UpdateGate />
+
   <div class="flex h-screen flex-col overflow-hidden">
     <main class="relative min-h-0 flex-1 overflow-hidden">
       {#if currentPage.type === "settings"}
@@ -437,13 +506,11 @@
             changePage({ type: "query", query: name });
           }}
           onWatch={quickPlay}
+          onSelectPerson={(p: Person) => (selectedPerson = p)}
+          onSelectProvider={(p: Provider) => (selectedProvider = p)}
         />
       {:else if currentPage.type === "home"}
-        <HomePage
-          onInsightsSwitch={() => {
-            changePage({ type: "insights" });
-          }}
-        />
+        <HomePage onSelectMedia={selectMedia} onWatch={quickPlay} />
       {:else if currentPage.type === "insights"}
         <InsightsPage />
       {:else if currentPage.type === "myList"}

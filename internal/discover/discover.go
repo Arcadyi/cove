@@ -3,6 +3,7 @@ package discover
 import (
 	"encoding/json"
 	"log"
+	"math"
 	"net/http"
 	"sort"
 	"strconv"
@@ -177,6 +178,10 @@ type Profile struct {
 	ExcludeMovie map[int]bool
 	ExcludeTV    map[int]bool
 	Contributors int
+	// MovieShare is the fraction of what the user actually watches (finished or
+	// currently watching) that is movies, 0..1. Drives the blended-feed mix;
+	// defaults to 0.5 when there's no watch history yet.
+	MovieShare float64
 }
 
 // genreScores returns the genre-score map for the given media type.
@@ -206,6 +211,11 @@ func signalWeight(s library.TasteSignal) float64 {
 	case library.StatusDropped:
 		w -= 2.0
 	case library.StatusWatching:
+		w += 0.5
+	case library.StatusWatchLater:
+		// Saving a title for later is a deliberate "this interests me" — a mild
+		// positive, on par with currently-watching, so its genres/keywords nudge
+		// recommendations toward similar things.
 		w += 0.5
 	}
 	if s.Dismissed {
@@ -251,6 +261,10 @@ func (s *Service) BuildProfile() *Profile {
 	}
 	var jobs []job
 
+	// Consumption mix for the blended feed: count only what the user actually
+	// watches (finished or currently watching), not saved-for-later or dropped.
+	var engagedMovie, engagedTV int
+
 	for _, sig := range signals {
 		// Exclude everything in the library regardless of weight: we never want
 		// to "discover" something the user is already watching, finished,
@@ -261,9 +275,17 @@ func (s *Service) BuildProfile() *Profile {
 			p.ExcludeMovie[sig.TmdbID] = true
 		}
 
+		if sig.Status == library.StatusFinished || sig.Status == library.StatusWatching {
+			if sig.MediaType == "tv" {
+				engagedTV++
+			} else {
+				engagedMovie++
+			}
+		}
+
 		w := signalWeight(sig)
-		// Skip near-neutral signals (e.g. an unrated watch_later) — they cost a
-		// Details call but move no scores.
+		// Skip near-neutral signals — they'd cost a Details call but move no
+		// scores (a positive status cancelled out by a below-neutral rating).
 		if w > -0.5 && w < 0.5 {
 			continue
 		}
@@ -271,6 +293,14 @@ func (s *Service) BuildProfile() *Profile {
 	}
 
 	p.Contributors = len(jobs)
+
+	// Lean the blended feed toward whichever type the user watches more; even
+	// split when there's nothing to go on yet.
+	if total := engagedMovie + engagedTV; total > 0 {
+		p.MovieShare = float64(engagedMovie) / float64(total)
+	} else {
+		p.MovieShare = 0.5
+	}
 
 	var (
 		mu  sync.Mutex
@@ -396,43 +426,63 @@ func (s *Service) Recommend(mediaType string, policy ContentPolicy, limit int) [
 	return out
 }
 
-// RecommendMixed returns one feed blending movies and TV, alternating between
-// the two so neither dominates. TMDB popularity isn't comparable across media
-// types (movies score higher), so a straight popularity merge would bury the
-// TV; zipping keeps the mix even. Both halves now draw on their own genre
-// scores, so the TV picks are as personalized as the movie picks. The taste
-// profile is built once and shared via the profile cache.
+// RecommendMixed returns one feed blending movies and TV, leaning toward the
+// type the user actually watches more (see Profile.MovieShare) rather than a
+// flat 50/50. TMDB popularity isn't comparable across media types (movies score
+// higher), so a straight popularity merge would bury the TV; an interleave keyed
+// to the consumption mix keeps the proportions intentional. Both halves draw on
+// their own genre scores, so the picks stay personalized. The taste profile is
+// built once and shared via the profile cache.
 func (s *Service) RecommendMixed(policy ContentPolicy, limit int) []tmdb.Media {
 	if limit <= 0 {
 		limit = 20
 	}
-	// Over-fetch each half so alternating can still reach `limit` if one side
-	// comes back thin (e.g. a library that's almost all movies).
-	half := limit/2 + 2
-	movies := s.Recommend("movie", policy, half)
-	shows := s.Recommend("tv", policy, half)
-	return mergeAlternating(movies, shows, limit)
+	movieShare := s.profile().MovieShare
+
+	// Split the page by the consumption mix (e.g. 65% movies → ~13 of 20).
+	movieN := int(math.Round(float64(limit) * movieShare))
+	if movieN < 0 {
+		movieN = 0
+	}
+	if movieN > limit {
+		movieN = limit
+	}
+	tvN := limit - movieN
+
+	// Over-fetch each side so the weighted merge can still reach `limit` if one
+	// side comes back thin (e.g. a library that's almost all movies).
+	const buf = 3
+	movies := s.Recommend("movie", policy, movieN+buf)
+	shows := s.Recommend("tv", policy, tvN+buf)
+	return mergeWeighted(movies, shows, movieShare, limit)
 }
 
-// mergeAlternating zips two slices: a[0], b[0], a[1], b[1], … capped at limit.
-func mergeAlternating(a, b []tmdb.Media, limit int) []tmdb.Media {
+// mergeWeighted interleaves movies and shows so the running movie share tracks
+// `movieShare` (0..1) throughout the list — not merely in the final totals —
+// while still drawing from whichever side has material left. At each slot it
+// takes whichever choice lands the running share closest to target.
+func mergeWeighted(movies, shows []tmdb.Media, movieShare float64, limit int) []tmdb.Media {
 	out := make([]tmdb.Media, 0, limit)
-	n := len(a)
-	if len(b) > n {
-		n = len(b)
-	}
-	for i := 0; i < n; i++ {
-		if i < len(a) {
-			out = append(out, a[i])
-			if len(out) >= limit {
-				return out
-			}
+	mi, si, mUsed := 0, 0, 0
+	for len(out) < limit && (mi < len(movies) || si < len(shows)) {
+		moviesLeft := mi < len(movies)
+		showsLeft := si < len(shows)
+
+		takeMovie := moviesLeft
+		if moviesLeft && showsLeft {
+			total := len(out)
+			withMovie := math.Abs(movieShare - float64(mUsed+1)/float64(total+1))
+			withShow := math.Abs(movieShare - float64(mUsed)/float64(total+1))
+			takeMovie = withMovie <= withShow
 		}
-		if i < len(b) {
-			out = append(out, b[i])
-			if len(out) >= limit {
-				return out
-			}
+
+		if takeMovie {
+			out = append(out, movies[mi])
+			mi++
+			mUsed++
+		} else {
+			out = append(out, shows[si])
+			si++
 		}
 	}
 	return out

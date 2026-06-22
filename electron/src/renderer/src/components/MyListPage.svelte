@@ -17,6 +17,7 @@
   import * as ButtonGroup from "$lib/components/ui/button-group/index.js";
   import * as Select from "$lib/components/ui/select/index.js";
   import InsightsPage from "./InsightsPage.svelte";
+  import {SvelteSet} from "svelte/reactivity";
 
   let {
     onSelectMedia,
@@ -171,7 +172,7 @@
   // Genre names present across the current type view — drives the genre filter
   // dropdown. Populates as Media objects finish loading.
   const availableGenres = $derived.by(() => {
-    const set = new Set<string>();
+    const set = new SvelteSet<string>();
     for (const e of entries) {
       if (activeType !== "all" && e.media_type !== activeType) continue;
       for (const g of genresFor(e)) set.add(g);
@@ -366,6 +367,9 @@
   }
 
   $effect(() => {
+    if (entries?.length === 0){
+      return
+    }
     for (const entry of entries) {
       ensureMediaLoaded(entry); // no-op if cached; fires in parallel otherwise
     }
@@ -584,7 +588,6 @@
                     <MediaCard
                       {media}
                       onclick={() => onSelectMedia(media)}
-                      onsimilar={(m) => onSelectMedia(m)}
                       newEpisodes={hasNewEpisodes(entry)}
                       onwatch={onWatch}
                     />

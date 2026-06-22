@@ -1,0 +1,65 @@
+name: Release
+
+# Build + publish a release when a version tag is pushed, e.g.:
+#   npm version patch        # bumps electron/package.json
+#   git push --follow-tags
+# (electron-builder names the GitHub release from package.json's version, so
+# keep the tag and that version in sync — v1.0.1 ⇄ "version": "1.0.1".)
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write # needed for GITHUB_TOKEN to create/upload releases
+
+jobs:
+  release:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            binary: cove
+            ebuilder: --linux
+          - os: windows-latest
+            binary: cove.exe
+            ebuilder: --win
+    runs-on: ${{ matrix.os }}
+
+    # The Electron app lives in ./electron; the Go module is at the repo root.
+    defaults:
+      run:
+        working-directory: electron
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      # Build the Go sidecar at the repo root into the name electron-builder
+      # expects (../cove or ../cove.exe). CGO off → static, no C toolchain.
+      - name: Build Go sidecar
+        working-directory: .
+        env:
+          CGO_ENABLED: '0'
+        run: go build -o ${{ matrix.binary }} .
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: electron/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build renderer + main
+        run: npm run build
+
+      - name: Build installer and publish to Releases
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npx --no-install electron-builder ${{ matrix.ebuilder }} --publish always

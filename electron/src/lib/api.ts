@@ -137,12 +137,66 @@ export interface DiscoverInsights {
   signals_used: number;
 }
 
+// A /search/person result. profile_path / known_for posters arrive as fully
+// qualified URLs (the backend absolutises them).
+export interface Person {
+  id: number;
+  name: string;
+  profile_path: string;
+  known_for_department: string;
+  popularity: number;
+  known_for: Media[];
+}
+
+// A streaming/rental service from /watch/providers; logo_path is a full URL.
+export interface Provider {
+  provider_id: number;
+  provider_name: string;
+  logo_path: string;
+  display_priority: number;
+}
+
+// Sectioned payload from /api/search/multi.
+export interface SearchResults {
+  movies: Media[];
+  tv: Media[];
+  people: Person[];
+  providers: Provider[];
+}
+
+// Full person payload for the person overlay (bio + filmography).
+export interface PersonDetails {
+  id: number;
+  name: string;
+  biography: string;
+  profile_path: string;
+  known_for_department: string;
+  birthday: string;
+  place_of_birth: string;
+  credits: Media[];
+}
+
 // ── API ────────────────────────────────────────────────────────────────────────
 
 export const api = {
   // ── TMDB ────────────────────────────────────────────────────────────────────
   search: (q: string): Promise<Media[]> =>
     request(`/search?q=${encodeURIComponent(q)}`),
+
+  // Sectioned search: titles (split movie/tv), people, and providers.
+  searchMulti: (q: string): Promise<SearchResults> =>
+    request(`/search/multi?q=${encodeURIComponent(q)}`),
+
+  // Person bio + filmography for the person overlay.
+  getPerson: (id: number): Promise<PersonDetails> =>
+    request(`/person?id=${id}`),
+
+  // Popular titles available on a watch provider (US region).
+  providerTitles: (id: number, limit?: number): Promise<Media[]> => {
+    const p = new URLSearchParams({ id: String(id) });
+    if (limit != null) p.set("limit", String(limit));
+    return request(`/provider?${p}`);
+  },
 
   getKeywords: (q: string): Promise<{ id: number; name: string }[]> =>
     request(`/keywords?q=${encodeURIComponent(q)}`),

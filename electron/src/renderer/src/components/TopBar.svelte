@@ -5,11 +5,11 @@
     X,
     Search,
     House,
-    CirclePlus,
     ArrowLeft,
     Flame,
     Cog,
     Minimize2,
+    Bookmark,
   } from "lucide-svelte";
   import { Button } from "$lib/components/ui/button";
   import * as ButtonGroup from "$lib/components/ui/button-group/index.js";
@@ -221,7 +221,7 @@
                 selectPage("myList");
               }}
             >
-              <CirclePlus />
+              <Bookmark />
             </Button>
           </Tooltip.Trigger>
           <Tooltip.Content>

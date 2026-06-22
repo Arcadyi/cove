@@ -117,6 +117,7 @@
     { label: "Finished a title", value: "+1.5" },
     { label: "Watched to the end", value: "+1.0" },
     { label: "Currently watching", value: "+0.5" },
+    { label: "Saved to watch later", value: "+0.5" },
     { label: "Each ★ above / below 3", value: "±1.5" },
     { label: "Dropped", value: "−2.0" },
     { label: "Not interested", value: "−2.0" },
@@ -154,8 +155,8 @@
             <span class="truncate">{s.label}</span>
             <span class="ml-auto shrink-0 text-muted-foreground">
               {Math.round((s.value / total) * 100)}%{s.count != null
-                ? ` · ${s.count}`
-                : ""}
+              ? ` · ${s.count}`
+              : ""}
             </span>
           </li>
         {/each}
@@ -309,7 +310,7 @@
         <p>
           Your profile is built from
           <span class="font-medium text-foreground"
-            >{insights.signals_used}</span
+          >{insights.signals_used}</span
           >
           titles you've actively engaged with. Each becomes a like/dislike weight,
           which is spread across that title's genres and keywords:
