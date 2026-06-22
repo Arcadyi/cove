@@ -20,6 +20,50 @@ const BASE =
 
 // ── Request helpers ───────────────────────────────────────────────────────────
 
+// Concurrency limiter. A full homepage (Continue Watching + every taste row,
+// each packed with cards) fires hundreds of metadata fetches at once —
+// getImages + libraryGet per card, plus getDetails / getMediaByID per item.
+// Chromium can't track that many pending requests and starts failing them with
+// net::ERR_INSUFFICIENT_RESOURCES (which surfaces as "TypeError: Failed to
+// fetch"). We cap how many fetches are actually in flight; the rest wait in a
+// cheap in-memory queue rather than as pending browser requests.
+//
+// Only request/requestOrNull go through this. Long-lived streams (HLS, the
+// progress SSE, speedtest) deliberately bypass it — they'd hold a slot open
+// indefinitely and starve everything else.
+const MAX_CONCURRENT = 8;
+let inFlight = 0;
+const waiters: Array<() => void> = [];
+
+function acquireSlot(): Promise<void> {
+  if (inFlight < MAX_CONCURRENT) {
+    inFlight++;
+    return Promise.resolve();
+  }
+  return new Promise<void>((resolve) => waiters.push(resolve));
+}
+
+function releaseSlot(): void {
+  const next = waiters.shift();
+  // Hand the freed slot straight to the next waiter (inFlight unchanged), or
+  // give it back to the pool if nobody's waiting.
+  if (next) next();
+  else inFlight--;
+}
+
+/** fetch(), but never more than MAX_CONCURRENT calls outstanding at once. */
+async function limitedFetch(
+  input: RequestInfo | URL,
+  init?: RequestInit,
+): Promise<Response> {
+  await acquireSlot();
+  try {
+    return await fetch(input, init);
+  } finally {
+    releaseSlot();
+  }
+}
+
 /** Thrown for any non-2xx response so callers can distinguish HTTP failures. */
 export class ApiError extends Error {
   constructor(
@@ -34,7 +78,7 @@ export class ApiError extends Error {
 
 /** fetch + ok-check + JSON parse. Throws ApiError on non-2xx. */
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, init);
+  const res = await limitedFetch(`${BASE}${path}`, init);
   if (!res.ok) {
     throw new ApiError(res.status, await res.text().catch(() => ""), path);
   }
@@ -52,13 +96,34 @@ async function requestOrNull<T>(
   path: string,
   init?: RequestInit,
 ): Promise<T | null> {
-  const res = await fetch(`${BASE}${path}`, init);
+  const res = await limitedFetch(`${BASE}${path}`, init);
   if (res.status === 404) return null;
   if (!res.ok) {
     throw new ApiError(res.status, await res.text().catch(() => ""), path);
   }
   const text = await res.text();
   return text ? (JSON.parse(text) as T) : null;
+}
+
+// In-flight deduplication for read-only GET requests.
+//
+// The same tmdb id often appears in several rows simultaneously (Continue
+// Watching, a genre row, the tastes row), so getDetails / getImages / etc.
+// would fire N identical requests in the same tick. We collapse those into one
+// by caching the Promise while it's still pending; every subsequent caller for
+// the same path receives the exact same Promise and piggybacks on the single
+// in-flight fetch.
+//
+// Entries are removed in .finally() so that a transient failure isn't
+// permanently cached — the next call after an error starts a fresh request.
+const _inflight = new Map<string, Promise<unknown>>();
+
+function dedupedRequest<T>(path: string): Promise<T> {
+  const pending = _inflight.get(path);
+  if (pending) return pending as Promise<T>;
+  const p = request<T>(path).finally(() => _inflight.delete(path));
+  _inflight.set(path, p);
+  return p;
 }
 
 /** A torrent src is a bare infohash; anything starting with http is a direct URL. */
@@ -208,16 +273,16 @@ export const api = {
   // only have a bare tmdb_id (e.g. a LibraryEntry) and would otherwise have
   // to reconstruct a partial Media object by hand.
   getMediaByID: (tmdbId: number, mediaType: string): Promise<Media> =>
-    request(`/media?id=${tmdbId}&type=${mediaType}`),
+    dedupedRequest(`/media?id=${tmdbId}&type=${mediaType}`),
 
   getDetails: (media: Media): Promise<Details> =>
-    request(`/details?id=${media.id}&type=${media.media_type}`),
+    dedupedRequest(`/details?id=${media.id}&type=${media.media_type}`),
 
   getImages: (media: Media): Promise<MediaImages> =>
-    request(`/images?id=${media.id}&type=${media.media_type}`),
+    dedupedRequest(`/images?id=${media.id}&type=${media.media_type}`),
 
   getVideos: (media: Media): Promise<MediaVideos> =>
-    request(`/videos?id=${media.id}&type=${media.media_type}`),
+    dedupedRequest(`/videos?id=${media.id}&type=${media.media_type}`),
 
   getLogos: (id: number, mediaType: string): Promise<string[]> =>
     request(`/logos?id=${id}&type=${mediaType}`),

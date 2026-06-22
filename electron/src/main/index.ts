@@ -1,11 +1,17 @@
 import { app, BrowserWindow, ipcMain, shell } from "electron";
-import { join } from "path";
+import { join, extname, normalize, sep } from "path";
+import { createReadStream, statSync } from "fs";
 import { spawn, ChildProcess } from "child_process";
 import { is } from "@electron-toolkit/utils";
 import { autoUpdater } from "electron-updater";
 import http from "http";
 
 let goProcess: ChildProcess | null = null;
+
+// In production the renderer is served over http://localhost (see
+// startRendererServer) rather than file://, because YouTube embeds (trailers)
+// refuse to load from a file:// origin — they require a real HTTP origin.
+let rendererURL: string | null = null;
 
 // The Go sidecar is `cove` everywhere except Windows, where the build produces
 // `cove.exe`. spawn() needs the exact filename, so resolve it per platform.
@@ -25,6 +31,81 @@ function waitForGo(retries = 50): Promise<void> {
         });
     };
     attempt();
+  });
+}
+
+// Serve the built renderer (out/renderer, inside the asar) over an ephemeral
+// http://127.0.0.1 port. Electron's fs reads asar paths transparently, so
+// createReadStream works on the packed files. We do this — instead of
+// loadFile(file://) — so the renderer has a real HTTP origin, which YouTube
+// trailer embeds require (a file:// or custom-scheme origin is rejected).
+const MIME: Record<string, string> = {
+  ".html": "text/html; charset=utf-8",
+  ".js": "text/javascript; charset=utf-8",
+  ".mjs": "text/javascript; charset=utf-8",
+  ".css": "text/css; charset=utf-8",
+  ".json": "application/json; charset=utf-8",
+  ".map": "application/json; charset=utf-8",
+  ".svg": "image/svg+xml",
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".gif": "image/gif",
+  ".webp": "image/webp",
+  ".ico": "image/x-icon",
+  ".woff": "font/woff",
+  ".woff2": "font/woff2",
+  ".ttf": "font/ttf",
+  ".wasm": "application/wasm",
+};
+
+function startRendererServer(): Promise<string> {
+  const root = join(__dirname, "../renderer");
+
+  const server = http.createServer((req, res) => {
+    try {
+      const urlPath = decodeURIComponent((req.url || "/").split("?")[0]);
+      let filePath = normalize(join(root, urlPath));
+
+      // Path-traversal guard: never serve outside the renderer root.
+      if (filePath !== root && !filePath.startsWith(root + sep)) {
+        res.writeHead(403).end("Forbidden");
+        return;
+      }
+
+      let info: ReturnType<typeof statSync> | null = null;
+      try {
+        info = statSync(filePath);
+      } catch {
+        info = null;
+      }
+
+      if (!info || info.isDirectory()) {
+        // A real asset that's missing → 404; a route/dir (no extension) → SPA
+        // entry. This app loads at "/", so this mostly just serves index.html.
+        if (extname(urlPath)) {
+          res.writeHead(404).end("Not found");
+          return;
+        }
+        filePath = join(root, "index.html");
+      }
+
+      const type = MIME[extname(filePath).toLowerCase()] || "application/octet-stream";
+      res.writeHead(200, { "Content-Type": type });
+      createReadStream(filePath).pipe(res);
+    } catch {
+      res.writeHead(500).end("Internal error");
+    }
+  });
+
+  return new Promise((resolve, reject) => {
+    server.on("error", reject);
+    // Port 0 → OS picks a free port; any http://localhost origin satisfies YouTube.
+    server.listen(0, "127.0.0.1", () => {
+      const addr = server.address();
+      const port = typeof addr === "object" && addr ? addr.port : 0;
+      resolve(`http://localhost:${port}`);
+    });
   });
 }
 
@@ -86,9 +167,15 @@ function createWindow(): BrowserWindow {
     mainWindow.loadURL(process.env["ELECTRON_RENDERER_URL"]).then(() => {
       console.log("[COVE:ELECTRON]: Renderer URL Loaded");
     });
+  } else if (rendererURL) {
+    // Production: served over http://localhost so YouTube embeds work.
+    mainWindow.loadURL(rendererURL).then(() => {
+      console.log("[COVE:ELECTRON]: Renderer served at", rendererURL);
+    });
   } else {
+    // Last-resort fallback (shouldn't happen if the server started).
     mainWindow.loadFile(join(__dirname, "../renderer/index.html")).then(() => {
-      console.log("[COVE:ELECTRON]: Index Loaded");
+      console.log("[COVE:ELECTRON]: Index Loaded (file://)");
     });
   }
 
@@ -176,6 +263,9 @@ app.whenReady().then(async () => {
 
   try {
     await waitForGo();
+    if (!is.dev) {
+      rendererURL = await startRendererServer();
+    }
     const mainWindow = createWindow();
     setupAutoUpdates(mainWindow);
   } catch (error) {

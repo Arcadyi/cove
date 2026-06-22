@@ -214,35 +214,51 @@
 
   // ── Load animation ────────────────────────────────────────────────────────
   onMount(() => {
-    api
-      .getImages(media)
-      .then((d) => {
-        images = d;
-      })
-      .catch((err) => {
-        // Network/server hiccup: fall back to the plain poster (the template's
-        // poster branch) instead of leaving the card un-rendered.
-        console.error("MediaCard: failed to load images", err);
-        images = { backdrops: [], logos: [], posters: [] };
-      })
-      .finally(() => {
-        // Reveal + animate in regardless of whether images loaded, so a failed
-        // fetch can't strand the card invisible.
-        logoLoaded = true;
-        if (buttonEl) {
-          animate(buttonEl, {
-            scale: [0.3, 1.05, 1],
-            opacity: [0, 1],
-            duration: 500,
-            easing: "easeOutExpo",
-            onComplete: () => {
-              // Clear the inline transform so this element no longer acts as a
-              // containing block for position:fixed children (hover card).
-              if (buttonEl) buttonEl.style.transform = "";
-            },
+    // Only fetch images once the card scrolls close to the viewport.
+    // rootMargin gives a 200 px runway so images are usually ready before
+    // the card is fully visible; cards already in the viewport fire immediately.
+    const observer = new IntersectionObserver(
+      (entries, obs) => {
+        if (!entries[0].isIntersecting) return;
+        obs.disconnect();
+
+        api
+          .getImages(media)
+          .then((d) => {
+            images = d;
+          })
+          .catch((err) => {
+            // Network/server hiccup: fall back to the plain poster (the template's
+            // poster branch) instead of leaving the card un-rendered.
+            console.error("MediaCard: failed to load images", err);
+            images = { backdrops: [], logos: [], posters: [] };
+          })
+          .finally(() => {
+            // Reveal + animate in regardless of whether images loaded, so a failed
+            // fetch can't strand the card invisible.
+            logoLoaded = true;
+            if (buttonEl) {
+              animate(buttonEl, {
+                scale: [0.3, 1.05, 1],
+                opacity: [0, 1],
+                duration: 500,
+                easing: "easeOutExpo",
+                onComplete: () => {
+                  // Clear the inline transform so this element no longer acts as a
+                  // containing block for position:fixed children (hover card).
+                  if (buttonEl) buttonEl.style.transform = "";
+                },
+              });
+            }
           });
-        }
-      });
+      },
+      { rootMargin: "200px" },
+    );
+
+    if (buttonEl) observer.observe(buttonEl);
+
+    // Cleanup if the component is destroyed before the card ever enters view.
+    return () => observer.disconnect();
     // libraryEntry is loaded by the $libraryChanged effect above (which also
     // runs on mount), so no separate fetch is needed here.
   });

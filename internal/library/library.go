@@ -588,14 +588,11 @@ func (l *Library) handleItem(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		l.mu.RUnlock()
-		// Only 404 when there is genuinely nothing at all — no entry and no
-		// progress history. An entry-less response with progress records is
-		// valid: it means the user removed the title from their list but their
-		// watch history is still intact.
-		if entry == nil && len(progList) == 0 {
-			http.Error(w, "not found", http.StatusNotFound)
-			return
-		}
+		// Always respond 200, even when the title isn't in the library. Every
+		// MediaCard probes this endpoint to check whether its title is saved, so
+		// a 404 here floods the devtools console with "failed to load resource"
+		// for every not-yet-saved title. A null `entry` is the not-found signal
+		// instead (the frontend's requestOrNull / `result?.entry` handles it).
 		if progList == nil {
 			progList = []*WatchProgress{}
 		}
