@@ -12,6 +12,10 @@ files:
   - '!{tsconfig.json,tsconfig.node.json,tsconfig.web.json}'
 asarUnpack:
   - resources/**
+  # ffmpeg/ffprobe binaries can't be exec'd from inside the asar — unpack them
+  # to app.asar.unpacked (the main process remaps the path accordingly).
+  - node_modules/@ffmpeg-installer/**
+  - node_modules/@ffprobe-installer/**
 # Shared across platforms. The Go sidecar binary differs by OS (cove vs
 # cove.exe), so it's declared per-platform below; these merge with the
 # platform-specific extraResources.
@@ -19,12 +23,12 @@ extraResources:
   - from: ../.env
     to: .env
 win:
-  executableName: cove
+  executableName: electron
   extraResources:
     - from: ../cove.exe
       to: cove.exe
 nsis:
-  artifactName: ${name}-${version}-setup.${ext}
+  artifactName: ${productName}-${version}-setup.${ext}
   shortcutName: ${productName}
   uninstallDisplayName: ${productName}
   createDesktopShortcut: always
@@ -37,7 +41,7 @@ linux:
     - from: ../cove
       to: cove
 appImage:
-  artifactName: ${name}-${version}.${ext}
+  artifactName: ${productName}-${version}.${ext}
 npmRebuild: false
 publish:
   provider: github

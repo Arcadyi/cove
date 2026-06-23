@@ -261,7 +261,7 @@ func ProbeAll(mediaURL string) ([]AudioTrackInfo, []SubtitleTrackInfo, string, f
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "ffprobe",
+	cmd := exec.CommandContext(ctx, ffprobeBin(),
 		"-v", "quiet",
 		"-print_format", "json",
 		"-show_streams",
@@ -388,7 +388,7 @@ func (p *Player) ExtractSubtitle(input string, subtitleIndex int, w http.Respons
 	result, err, _ := p.subtitleGroup.Do(key, func() (interface{}, error) {
 		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 		defer cancel()
-		cmd := exec.CommandContext(ctx, "ffmpeg",
+		cmd := exec.CommandContext(ctx, ffmpegBin(),
 			"-i", input,
 			"-map", fmt.Sprintf("0:s:%d", subtitleIndex),
 			"-c:s", "webvtt", "-f", "webvtt", "pipe:1",
@@ -424,7 +424,7 @@ func StreamWithAudio(input string, audioIndex int, w http.ResponseWriter, r *htt
 	defer os.Remove(tmpPath)
 
 	ctx := r.Context()
-	cmd := exec.CommandContext(ctx, "ffmpeg",
+	cmd := exec.CommandContext(ctx, ffmpegBin(),
 		"-i", input,
 		"-map", "0:v:0",
 		"-map", fmt.Sprintf("0:a:%d", audioIndex),

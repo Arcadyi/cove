@@ -1,6 +1,6 @@
 {
   "name": "cove",
-  "version": "0.6.20",
+  "version": "0.6.21",
   "description": "An Electron application with Svelte and TypeScript",
   "main": "./out/main/index.js",
   "author": "example.com",
@@ -26,6 +26,8 @@
     "@electron-toolkit/utils": "^4.0.0",
     "animejs": "^4.4.1",
     "dashjs": "^5.2.0",
+    "@ffmpeg-installer/ffmpeg": "^1.1.0",
+    "@ffprobe-installer/ffprobe": "^2.1.2",
     "electron-updater": "^6.3.9",
     "hls.js": "^1.6.16",
     "lucide-svelte": "^1.0.1",

@@ -217,7 +217,7 @@ func (s *hlsSession) startFfmpeg(startSeg int) error {
 		)
 	}
 
-	s.cmd = exec.Command("ffmpeg", args...)
+	s.cmd = exec.Command(ffmpegBin(), args...)
 	var ffmpegStderr strings.Builder
 	s.cmd.Stderr = &ffmpegStderr
 
@@ -380,7 +380,7 @@ func getHighestSegmentOnDisk(dir string, file string) int {
 // hundreds of seconds (with only a handful of packets) reveals a timestamp-offset
 // bug rather than a genuinely long encode.
 func logSegmentTiming(sessionID, fullPath, file string) {
-	out, err := exec.Command("ffprobe",
+	out, err := exec.Command(ffprobeBin(),
 		"-v", "error",
 		"-select_streams", "v",
 		"-show_entries", "packet=pts_time,flags",

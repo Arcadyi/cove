@@ -49,6 +49,12 @@
   let buttonEl = $state<HTMLElement | null>(null);
   let hoverCardInstance = $state<MediaHoverCard | null>(null);
 
+  // Lazy loading: a card only fetches its art and library state once it scrolls
+  // near the viewport (see the IntersectionObserver in onMount). Without this, a
+  // long multi-row page fires getImages + libraryGet for every off-screen card
+  // on mount — hundreds of requests at once.
+  let visible = $state(false);
+
   // ── UI state ──────────────────────────────────────────────────────────────
   let hovered = $state(false);
   let hoverCardStyle = $state("");
@@ -200,6 +206,9 @@
   $effect(() => {
     // eslint-disable-next-line @typescript-eslint/no-unused-expressions
     $libraryChanged;
+    // Skip off-screen cards; the lookup runs once the card becomes visible (and
+    // re-runs for visible cards whenever the library changes).
+    if (!visible) return;
     api
       .libraryGet(media.id, media.media_type)
       .then((result) => {
@@ -212,55 +221,62 @@
       });
   });
 
-  // ── Load animation ────────────────────────────────────────────────────────
-  onMount(() => {
-    // Only fetch images once the card scrolls close to the viewport.
-    // rootMargin gives a 200 px runway so images are usually ready before
-    // the card is fully visible; cards already in the viewport fire immediately.
-    const observer = new IntersectionObserver(
-      (entries, obs) => {
-        if (!entries[0].isIntersecting) return;
-        obs.disconnect();
-
-        api
-          .getImages(media)
-          .then((d) => {
-            images = d;
-          })
-          .catch((err) => {
-            // Network/server hiccup: fall back to the plain poster (the template's
-            // poster branch) instead of leaving the card un-rendered.
-            console.error("MediaCard: failed to load images", err);
-            images = { backdrops: [], logos: [], posters: [] };
-          })
-          .finally(() => {
-            // Reveal + animate in regardless of whether images loaded, so a failed
-            // fetch can't strand the card invisible.
-            logoLoaded = true;
-            if (buttonEl) {
-              animate(buttonEl, {
-                scale: [0.3, 1.05, 1],
-                opacity: [0, 1],
-                duration: 500,
-                easing: "easeOutExpo",
-                onComplete: () => {
-                  // Clear the inline transform so this element no longer acts as a
-                  // containing block for position:fixed children (hover card).
-                  if (buttonEl) buttonEl.style.transform = "";
-                },
-              });
-            }
+  // ── Lazy art loading ──────────────────────────────────────────────────────
+  // Fetch poster/logo art only once the card is (near) visible, then reveal it.
+  let imagesRequested = false;
+  $effect(() => {
+    if (!visible || imagesRequested) return;
+    imagesRequested = true;
+    api
+      .getImages(media)
+      .then((d) => {
+        images = d;
+      })
+      .catch((err) => {
+        // Network/server hiccup: fall back to the plain poster (the template's
+        // poster branch) instead of leaving the card un-rendered.
+        console.error("MediaCard: failed to load images", err);
+        images = { backdrops: [], logos: [], posters: [] };
+      })
+      .finally(() => {
+        // Reveal + animate in regardless of whether images loaded, so a failed
+        // fetch can't strand the card invisible.
+        logoLoaded = true;
+        if (buttonEl) {
+          animate(buttonEl, {
+            scale: [0.3, 1.05, 1],
+            opacity: [0, 1],
+            duration: 500,
+            easing: "easeOutExpo",
+            onComplete: () => {
+              // Clear the inline transform so this element no longer acts as a
+              // containing block for position:fixed children (hover card).
+              if (buttonEl) buttonEl.style.transform = "";
+            },
           });
+        }
+      });
+  });
+
+  // Flip `visible` when the card scrolls within 300px of the viewport, which
+  // triggers the two effects above. Loads eagerly if IntersectionObserver is
+  // unavailable. Library state still updates on $libraryChanged afterwards.
+  onMount(() => {
+    if (!buttonEl || typeof IntersectionObserver === "undefined") {
+      visible = true;
+      return;
+    }
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) {
+          visible = true;
+          io.disconnect(); // load once; no need to track further
+        }
       },
-      { rootMargin: "200px" },
+      { rootMargin: "300px" },
     );
-
-    if (buttonEl) observer.observe(buttonEl);
-
-    // Cleanup if the component is destroyed before the card ever enters view.
-    return () => observer.disconnect();
-    // libraryEntry is loaded by the $libraryChanged effect above (which also
-    // runs on mount), so no separate fetch is needed here.
+    io.observe(buttonEl);
+    return () => io.disconnect();
   });
 </script>
 

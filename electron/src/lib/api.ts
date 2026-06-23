@@ -64,6 +64,33 @@ async function limitedFetch(
   }
 }
 
+// In-flight request coalescing. A title often appears in several rows at once
+// (Continue Watching + a genre row + the tastes row), so the same getDetails /
+// getImages / getMediaByID fires multiple times simultaneously. We share one
+// pending promise per identical request instead of duplicating the fetch.
+//
+// Only GETs are coalesced — mutations (PUT/POST/PATCH/DELETE) must each run.
+// Entries are evicted the moment the request settles, so this collapses
+// concurrent bursts without ever serving a cached/stale response: a request
+// made after the previous one finished always hits the network fresh.
+const inflight = new Map<string, Promise<unknown>>();
+
+function coalesce<T>(
+  key: string,
+  init: RequestInit | undefined,
+  exec: () => Promise<T>,
+): Promise<T> {
+  const method = (init?.method ?? "GET").toUpperCase();
+  if (method !== "GET") return exec();
+
+  const existing = inflight.get(key) as Promise<T> | undefined;
+  if (existing) return existing;
+
+  const p = exec().finally(() => inflight.delete(key));
+  inflight.set(key, p);
+  return p;
+}
+
 /** Thrown for any non-2xx response so callers can distinguish HTTP failures. */
 export class ApiError extends Error {
   constructor(
@@ -78,12 +105,15 @@ export class ApiError extends Error {
 
 /** fetch + ok-check + JSON parse. Throws ApiError on non-2xx. */
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await limitedFetch(`${BASE}${path}`, init);
-  if (!res.ok) {
-    throw new ApiError(res.status, await res.text().catch(() => ""), path);
-  }
-  const text = await res.text();
-  return (text ? JSON.parse(text) : undefined) as T;
+  const exec = async (): Promise<T> => {
+    const res = await limitedFetch(`${BASE}${path}`, init);
+    if (!res.ok) {
+      throw new ApiError(res.status, await res.text().catch(() => ""), path);
+    }
+    const text = await res.text();
+    return (text ? JSON.parse(text) : undefined) as T;
+  };
+  return coalesce(`request:${path}`, init, exec);
 }
 
 /**
@@ -96,34 +126,16 @@ async function requestOrNull<T>(
   path: string,
   init?: RequestInit,
 ): Promise<T | null> {
-  const res = await limitedFetch(`${BASE}${path}`, init);
-  if (res.status === 404) return null;
-  if (!res.ok) {
-    throw new ApiError(res.status, await res.text().catch(() => ""), path);
-  }
-  const text = await res.text();
-  return text ? (JSON.parse(text) as T) : null;
-}
-
-// In-flight deduplication for read-only GET requests.
-//
-// The same tmdb id often appears in several rows simultaneously (Continue
-// Watching, a genre row, the tastes row), so getDetails / getImages / etc.
-// would fire N identical requests in the same tick. We collapse those into one
-// by caching the Promise while it's still pending; every subsequent caller for
-// the same path receives the exact same Promise and piggybacks on the single
-// in-flight fetch.
-//
-// Entries are removed in .finally() so that a transient failure isn't
-// permanently cached — the next call after an error starts a fresh request.
-const _inflight = new Map<string, Promise<unknown>>();
-
-function dedupedRequest<T>(path: string): Promise<T> {
-  const pending = _inflight.get(path);
-  if (pending) return pending as Promise<T>;
-  const p = request<T>(path).finally(() => _inflight.delete(path));
-  _inflight.set(path, p);
-  return p;
+  const exec = async (): Promise<T | null> => {
+    const res = await limitedFetch(`${BASE}${path}`, init);
+    if (res.status === 404) return null;
+    if (!res.ok) {
+      throw new ApiError(res.status, await res.text().catch(() => ""), path);
+    }
+    const text = await res.text();
+    return text ? (JSON.parse(text) as T) : null;
+  };
+  return coalesce(`requestOrNull:${path}`, init, exec);
 }
 
 /** A torrent src is a bare infohash; anything starting with http is a direct URL. */
@@ -273,16 +285,16 @@ export const api = {
   // only have a bare tmdb_id (e.g. a LibraryEntry) and would otherwise have
   // to reconstruct a partial Media object by hand.
   getMediaByID: (tmdbId: number, mediaType: string): Promise<Media> =>
-    dedupedRequest(`/media?id=${tmdbId}&type=${mediaType}`),
+    request(`/media?id=${tmdbId}&type=${mediaType}`),
 
   getDetails: (media: Media): Promise<Details> =>
-    dedupedRequest(`/details?id=${media.id}&type=${media.media_type}`),
+    request(`/details?id=${media.id}&type=${media.media_type}`),
 
   getImages: (media: Media): Promise<MediaImages> =>
-    dedupedRequest(`/images?id=${media.id}&type=${media.media_type}`),
+    request(`/images?id=${media.id}&type=${media.media_type}`),
 
   getVideos: (media: Media): Promise<MediaVideos> =>
-    dedupedRequest(`/videos?id=${media.id}&type=${media.media_type}`),
+    request(`/videos?id=${media.id}&type=${media.media_type}`),
 
   getLogos: (id: number, mediaType: string): Promise<string[]> =>
     request(`/logos?id=${id}&type=${mediaType}`),

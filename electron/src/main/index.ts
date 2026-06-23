@@ -1,10 +1,21 @@
 import { app, BrowserWindow, ipcMain, shell } from "electron";
 import { join, extname, normalize, sep } from "path";
-import { createReadStream, statSync } from "fs";
+import { createReadStream, statSync, createWriteStream, existsSync } from "fs";
+import type { WriteStream } from "fs";
 import { spawn, ChildProcess } from "child_process";
 import { is } from "@electron-toolkit/utils";
 import { autoUpdater } from "electron-updater";
 import http from "http";
+
+// ffmpeg/ffprobe binaries via @ffmpeg-installer / @ffprobe-installer — recent,
+// per-platform static builds. (ffprobe-static's bundled Linux binary segfaulted
+// even with a cleaned environment.) Both export { path }; we require + cast to
+// avoid depending on bundled type declarations. This file is CommonJS (it uses
+// __dirname), so require is available at runtime.
+const ffmpegInstaller = require("@ffmpeg-installer/ffmpeg") as { path: string };
+const ffprobeInstaller = require("@ffprobe-installer/ffprobe") as {
+  path: string;
+};
 
 let goProcess: ChildProcess | null = null;
 
@@ -251,15 +262,103 @@ function setupAutoUpdates(win: BrowserWindow): void {
   setInterval(check, 6 * 60 * 60 * 1000);
 }
 
+// Resolve the bundled ffmpeg/ffprobe binaries and hand them to the Go sidecar
+// via env. Both installer packages expose { path }. In the packaged app these
+// resolve to a path inside the asar, so remap to app.asar.unpacked (where
+// asarUnpack actually extracts them); in dev the path already points at
+// node_modules and the replace is a harmless no-op. If a binary is somehow
+// unavailable we just omit the var and Go falls back to PATH.
+// When packaged as an AppImage, AppRun injects LD_LIBRARY_PATH / LD_PRELOAD
+// pointing at the AppImage's bundled libraries and stashes the originals in
+// *_ORIG. Anything we spawn (the Go sidecar, and the ffmpeg/ffprobe it execs)
+// inherits those and loads mismatched host libs — which makes the bundled
+// ffmpeg/ffprobe segfault. Restore the original values (or drop the vars) so
+// child processes run against a clean, host environment. No-op off AppImage.
+function stripAppImageEnv(env: NodeJS.ProcessEnv): void {
+  if (!process.env.APPIMAGE) return;
+  for (const key of ["LD_LIBRARY_PATH", "LD_PRELOAD"]) {
+    const orig = env[`${key}_ORIG`];
+    if (orig !== undefined) env[key] = orig;
+    else delete env[key];
+  }
+}
+
+function goSpawnEnv(): NodeJS.ProcessEnv {
+  const env = { ...process.env };
+  const ffmpeg = ffmpegInstaller?.path as string | undefined;
+  const ffprobe = ffprobeInstaller?.path as string | undefined;
+  if (ffmpeg) env.FFMPEG_PATH = ffmpeg.replace("app.asar", "app.asar.unpacked");
+  if (ffprobe)
+    env.FFPROBE_PATH = ffprobe.replace("app.asar", "app.asar.unpacked");
+  stripAppImageEnv(env);
+  return env;
+}
+
+// Backend logging. The packaged app previously discarded the Go sidecar's
+// stdout/stderr, so ffmpeg failures were invisible. We now tee everything to a
+// log file under userData (~/.config/cove on Linux, %AppData%\cove on Windows)
+// and to the console, so a terminal-launched build shows it live and a
+// GUI-launched one leaves a readable trail.
+let backendLog: WriteStream | null = null;
+
+function openBackendLog(): string {
+  const p = join(app.getPath("userData"), "cove-backend.log");
+  try {
+    backendLog = createWriteStream(p, { flags: "a" });
+    backendLog.write(`\n--- session ${new Date().toISOString()} ---\n`);
+  } catch (e) {
+    console.error("[main] could not open backend log:", e);
+  }
+  return p;
+}
+
+function logMain(line: string): void {
+  console.log(line);
+  backendLog?.write(line + "\n");
+}
+
+function attachGoLogging(proc: ChildProcess): void {
+  proc.stderr?.on("data", (d) => {
+    const s = d.toString();
+    console.error("[go]", s);
+    backendLog?.write(s);
+  });
+  proc.stdout?.on("data", (d) => {
+    const s = d.toString();
+    console.log("[go]", s);
+    backendLog?.write(s);
+  });
+}
+
 app.whenReady().then(async () => {
+  const logPath = openBackendLog();
+  logMain(`[main] backend log: ${logPath}`);
+
+  const env = goSpawnEnv();
+  logMain(
+    `[main] APPIMAGE=${process.env.APPIMAGE ?? "(no)"} ` +
+    `child LD_LIBRARY_PATH=${env.LD_LIBRARY_PATH ?? "(cleared)"}`,
+  );
+  // Verify the bundled binaries actually resolved to a real file — a wrong or
+  // missing path here is the prime suspect for "stream never starts".
+  logMain(
+    `[main] FFMPEG_PATH=${env.FFMPEG_PATH ?? "(unset → PATH)"} exists=${
+      env.FFMPEG_PATH ? existsSync(env.FFMPEG_PATH) : false
+    }`,
+  );
+  logMain(
+    `[main] FFPROBE_PATH=${env.FFPROBE_PATH ?? "(unset → PATH)"} exists=${
+      env.FFPROBE_PATH ? existsSync(env.FFPROBE_PATH) : false
+    }`,
+  );
+
   if (is.dev) {
-    goProcess = spawn(join(__dirname, "../../..", goBinary));
-    goProcess.stderr?.on("data", (d) => console.error("[go]", d.toString()));
-    goProcess.stdout?.on("data", (d) => console.log("[go]", d.toString()));
+    goProcess = spawn(join(__dirname, "../../..", goBinary), { env });
   } else {
     const binaryPath = join(process.resourcesPath, goBinary);
-    goProcess = spawn(binaryPath);
+    goProcess = spawn(binaryPath, { env });
   }
+  attachGoLogging(goProcess);
 
   try {
     await waitForGo();
