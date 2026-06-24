@@ -52,5 +52,7 @@ Window {
         backgroundColor: "transparent"
         webChannel: coveChannel
         url: launchUrl
+        // window.QWebChannel is injected from C++ (installBridgeScript) onto the
+        // default profile this view uses — see src/main.cpp.
     }
 }

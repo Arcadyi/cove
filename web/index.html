@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Cove</title>
+  <meta
+    http-equiv="Content-Security-Policy"
+    content="
+      default-src 'self';
+      connect-src 'self' http://localhost:6969 blob: wss://*.youtube.com https://cdn.plyr.io https://*.ytimg.com https://*.youtube.com https://api.iconify.design https://api.unisvg.com https://api.simplesvg.com;
+      img-src 'self' https://image.tmdb.org data: https://*.ytimg.com https://*.youtube.com;
+      media-src 'self' http://localhost:6969 blob: https://cdn.plyr.io https://*.youtube.com https://*.ytimg.com;
+      script-src 'self' 'unsafe-inline';
+      style-src 'self' 'unsafe-inline';
+      frame-src https://www.youtube.com https://www.youtube-nocookie.com;
+    "
+  />
+</head>
+
+<body>
+<div id="app"></div>
+<script type="module" src="/src/main.ts"></script>
+</body>
+</html>

@@ -28,6 +28,9 @@
 #include <QTimer>
 #include <QUrl>
 #include <QtWebEngineQuick/QtWebEngineQuick>
+#include <QtWebEngineCore/QWebEngineProfile>
+#include <QtWebEngineCore/QWebEngineScript>
+#include <QtWebEngineCore/QWebEngineScriptCollection>
 #include <functional>
 #include <memory>
 
@@ -160,25 +163,40 @@ static void waitForBackend(quint16 port, std::function<void()> onReady) {
 }
 
 // Qt ships qwebchannel.js as a compiled-in resource of the WebChannel module.
-// We inline it into the test overlay so the page can talk to the bridge without
-// the frontend build (the real app will vendor its own copy in Step 3).
 static QString readQWebChannelJs() {
   QFile f(QStringLiteral(":/qtwebchannel/qwebchannel.js"));
   if (!f.open(QIODevice::ReadOnly)) {
-    qWarning() << "[shell] qwebchannel.js resource missing; bridge test disabled";
+    qWarning() << "[shell] qwebchannel.js resource missing; bridge unavailable";
     return {};
   }
   return QString::fromUtf8(f.readAll());
 }
 
+// Inject qwebchannel.js into every page at document creation so window.QWebChannel
+// exists before the app's JS runs. Installed on the default profile (which the
+// QML WebEngineView uses) BEFORE the engine loads, so it covers the first
+// navigation too. WebEngineScript isn't creatable from QML in Qt 6, so this is
+// done here where QWebEngineScript is a proper value type.
+static void installBridgeScript() {
+  const QString src = readQWebChannelJs();
+  if (src.isEmpty())
+    return;
+  QWebEngineScript script;
+  script.setName(QStringLiteral("qwebchannel"));
+  script.setSourceCode(src);
+  script.setInjectionPoint(QWebEngineScript::DocumentCreation);
+  script.setWorldId(QWebEngineScript::MainWorld);
+  script.setRunsOnSubFrames(false);
+  QWebEngineProfile::defaultProfile()->scripts()->insert(script);
+}
+
 // Translucent test overlay written to a temp file. Beyond the compositing proof
-// (transparent HTML over video), it now also exercises the QWebChannel bridge:
-// it connects to the registered `mpv` object, shows live position/duration/track
+// (transparent HTML over video), it also exercises the QWebChannel bridge: it
+// connects to the registered `mpv` object (QWebChannel is provided globally by
+// the injected user script — see main()), shows live position/duration/track
 // data pushed from C++ signals, and calls mpv.pause()/resume() on a timer so you
 // can watch JS drive native playback.
 static QString testOverlayUrl() {
-  const QString qwc = readQWebChannelJs();
-
   // The bridge bootstrap: connect, wire signals to the DOM, and exercise slots.
   const QString bootstrap = QStringLiteral(R"JS(
 new QWebChannel(qt.webChannelTransport, function (channel) {
@@ -223,8 +241,7 @@ new QWebChannel(qt.webChannelTransport, function (channel) {
   html += "<div id=\"trk\">tracks: &mdash;</div>";
   html += "<div id=\"act\">playing</div>";
   html += "</div>";
-  if (!qwc.isEmpty())
-    html += "<script>" + qwc + "</script><script>" + bootstrap + "</script>";
+  html += "<script>" + bootstrap + "</script>";
   html += "</body></html>";
 
   const QString path = QDir::temp().filePath("cove_overlay.html");
@@ -259,7 +276,7 @@ int main(int argc, char *argv[]) {
   QCommandLineOption backendOpt("backend", "Path to the Go sidecar binary.",
                                 "path", "../../cove");
   QCommandLineOption webrootOpt("webroot", "Path to the renderer build dir.",
-                                "path", "../../electron/out/renderer");
+                                "path", "../../web/dist");
   QCommandLineOption apiPortOpt("api-port", "Backend API port.", "port", "6969");
   QCommandLineOption playOpt(
       "play", "Compositing test: play this media file behind a test overlay.",
@@ -280,6 +297,10 @@ int main(int argc, char *argv[]) {
           : QString();
 
   QQmlApplicationEngine engine;
+
+  // Must run before the WebEngineView navigates so the script covers the first
+  // load (the QML view uses the default profile this installs onto).
+  installBridgeScript();
 
   auto loadScene = [&](const QString &url, const QString &mpvFile) {
     engine.rootContext()->setContextProperty("launchUrl", url);

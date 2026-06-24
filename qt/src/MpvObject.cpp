@@ -211,6 +211,8 @@ void MpvObject::handleRenderReady() {
 }
 
 void MpvObject::play(const QString &url) {
+  // Composite the video surface again (it's hidden while stopped).
+  setVisible(true);
   // Defer until the render context exists, otherwise mpv inits the video output
   // with no context and permanently drops the video track for this file.
   if (m_renderReady)
@@ -220,7 +222,13 @@ void MpvObject::play(const QString &url) {
 }
 void MpvObject::pause() { setMpvProperty("pause", "yes"); }
 void MpvObject::resume() { setMpvProperty("pause", "no"); }
-void MpvObject::stop() { command({QStringList{"stop"}}); }
+void MpvObject::stop() {
+  m_pendingUrl.clear();
+  command({QStringList{"stop"}});
+  // mpv leaves the last frame in the FBO (it won't repaint with nothing loaded),
+  // so hide the item — otherwise the stale frame shows through the UI.
+  setVisible(false);
+}
 void MpvObject::seek(double seconds) {
   command({QStringList{"seek", QString::number(seconds), "absolute"}});
 }

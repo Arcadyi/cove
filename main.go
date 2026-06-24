@@ -78,7 +78,6 @@ func main() {
 		ticker := time.NewTicker(30 * time.Minute)
 		defer ticker.Stop()
 		for range ticker.C {
-			p.CleanupHLSSessions()
 			p.CleanupTorrents()
 		}
 	}()
@@ -95,7 +94,7 @@ func main() {
 	srv := &http.Server{
 		Addr:              ":6969",
 		ReadHeaderTimeout: 10 * time.Second,
-		// Don't set WriteTimeout — HLS segment serving and torrent streaming are long-lived
+		// Don't set WriteTimeout — torrent streaming is long-lived
 	}
 
 	log.Println("Server Running on: 6969")

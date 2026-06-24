@@ -3,3 +3,5 @@
 /cove
 /library.json
 /qt/build/
+/web/dist/
+/web/node_modules/

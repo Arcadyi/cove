@@ -9,7 +9,7 @@ set(CMAKE_AUTORCC ON)
 # Quick/Qml for the scene, WebEngineQuick for the QML WebEngineView, OpenGL for
 # the GL context plumbing mpv needs, WebChannelQuick for the JS<->C++ bridge.
 find_package(Qt6 REQUIRED COMPONENTS
-  Core Gui Qml Quick WebEngineQuick WebChannelQuick OpenGL
+  Core Gui Qml Quick WebEngineQuick WebEngineCore WebChannelQuick OpenGL
 )
 
 # libmpv via pkg-config (Arch ships headers + mpv.pc in the `mpv` package).
@@ -29,6 +29,7 @@ target_link_libraries(cove_shell PRIVATE
   Qt6::Qml
   Qt6::Quick
   Qt6::WebEngineQuick
+  Qt6::WebEngineCore
   Qt6::WebChannelQuick
   Qt6::OpenGL
   PkgConfig::MPV
