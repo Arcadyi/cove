@@ -164,4 +164,4 @@ class MpvPlayer {
   }
 }
 
-export const mpvPlayer = new MpvPlayer();
+export const Player = new MpvPlayer();

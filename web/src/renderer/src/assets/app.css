@@ -125,21 +125,4 @@
   * {
     @apply border-border outline-ring/50;
   }
-
-  /* Opaque app background by default. mpv renders to the whole window BEHIND
-     the transparent WebEngineView, so the app must be opaque to hide it —
-     except while the player is full-size (see .cove-playing below). */
-  html,
-  body,
-  #app {
-    background-color: var(--background);
-  }
-}
-
-/* App.svelte toggles `cove-playing` on <html> only while the player is
-   full-size: go transparent so the mpv video layer shows through. */
-html.cove-playing,
-html.cove-playing body,
-html.cove-playing #app {
-  background-color: transparent !important;
 }

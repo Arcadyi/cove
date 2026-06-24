@@ -8,7 +8,7 @@
   import type { Media } from "$lib/types/tmdb";
   import type { Person, Provider } from "$lib/api";
   import type { Stream } from "$lib/types/addons";
-  import MpvPlayer from "$lib/player/MpvPlayer.svelte";
+  import Player from "./components/Player.svelte";
   import * as Tooltip from "$lib/components/ui/tooltip";
   import { Maximize2, X } from "lucide-svelte";
   import { setMode } from "mode-watcher";
@@ -560,7 +560,7 @@
             easing: cubicOut,
           }}
         >
-          <MpvPlayer
+          <Player
             src={playerSession.stream.infoHash || playerSession.stream.url}
             media={playerSession.media}
             externalSubtitles={playerSession.subtitles}
