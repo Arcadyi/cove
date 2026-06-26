@@ -61,6 +61,16 @@ web-dev:
 run-debug: build
 	QTWEBENGINE_REMOTE_DEBUGGING=9222 $(SHELL_BIN) --backend ./$(GO_BIN) --webroot ./$(WEB_DIR)/dist
 
+## Hot-reload frontend dev: Vite serves the UI in-window with HMR via the
+## shell's --dev mode. Builds the backend + shell but NOT the frontend (Vite
+## serves it live). Requires the stripCspInDev() plugin in vite.config.ts.
+hot: go qt
+	bash scripts/dev-hot.sh
+
+## Same as `hot`, with QtWebEngine remote devtools on :9222 (open in a browser).
+hot-debug: go qt
+	QTWEBENGINE_REMOTE_DEBUGGING=9222 bash scripts/dev-hot.sh
+
 ## Remove build artifacts.
 clean:
 	rm -f $(GO_BIN)

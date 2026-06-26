@@ -281,20 +281,23 @@ int main(int argc, char *argv[]) {
   QCommandLineOption playOpt(
       "play", "Compositing test: play this media file behind a test overlay.",
       "file");
+  QCommandLineOption devOpt("dev", "Connect to the Vite development server for hot reload.");
   parser.addOption(backendOpt);
   parser.addOption(webrootOpt);
   parser.addOption(apiPortOpt);
   parser.addOption(playOpt);
+  parser.addOption(devOpt);
   parser.process(app);
 
   const QString backendPath =
       QFileInfo(parser.value(backendOpt)).absoluteFilePath();
   const QString webRoot = QFileInfo(parser.value(webrootOpt)).absoluteFilePath();
   const quint16 apiPort = parser.value(apiPortOpt).toUShort();
-  const QString testFile =
+    const QString testFile =
       parser.isSet(playOpt)
           ? QFileInfo(parser.value(playOpt)).absoluteFilePath()
           : QString();
+  const bool isDev = parser.isSet(devOpt);
 
   QQmlApplicationEngine engine;
 
@@ -332,9 +335,13 @@ int main(int argc, char *argv[]) {
         backend->kill();
     });
 
-    waitForBackend(apiPort, [loadScene, baseUrl]() {
+waitForBackend(apiPort, [loadScene, baseUrl, isDev]() {
       qInfo().noquote() << "[shell] backend up — loading UI";
-      loadScene(baseUrl.toString(), QString());
+      if (isDev) {
+        loadScene(QStringLiteral("http://localhost:5173"), QString());
+      } else {
+        loadScene(baseUrl.toString(), QString());
+      }
     });
   }
 

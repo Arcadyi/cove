@@ -40,6 +40,7 @@ interface MpvBridge {
   setSubtitleTrack(id: number): void;
   addSubtitle(url: string, title: string, lang: string): void;
   setVolume(volume: number): void;
+  requestState(): void;
 }
 
 declare global {
@@ -98,6 +99,13 @@ class MpvPlayer {
 
       this.ready = true;
       this.#resolveReady();
+
+      // mpv emitted the initial values of its observed properties before this
+      // channel connected, so those first events were missed. Pull the current
+      // state now that our handlers are attached — otherwise `paused` stays at
+      // its default `true`, which inverts the play/pause button and makes the
+      // progress-save effect (gated on !paused) never fire.
+      mpv.requestState();
     });
   }
 

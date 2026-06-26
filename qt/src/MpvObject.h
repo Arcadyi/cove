@@ -41,6 +41,13 @@ public slots:
                    const QString &lang = QString()); // external (e.g. OpenSubtitles)
   void setVolume(double volume);     // 0–100
 
+  // Re-emit the current playback state. The web client calls this right after
+  // it connects, because mpv emits the initial values of observed properties
+  // (pause, duration, …) before the QWebChannel bridge has attached its signal
+  // handlers — so without this, state like `paused` never reaches the UI until
+  // the next time it happens to change.
+  void requestState();
+
 signals:
   // Emitted from mpv's render thread; connected queued to update() on the GUI
   // thread (QQuickFramebufferObject::update() must run there).

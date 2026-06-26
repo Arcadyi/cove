@@ -254,6 +254,24 @@ void MpvObject::setVolume(double volume) {
   setMpvProperty("volume", QString::number(volume));
 }
 
+void MpvObject::requestState() {
+  if (!m_mpv)
+    return;
+  // Query mpv directly and re-emit. time-pos/duration error out when nothing is
+  // loaded yet (negative return) — those are simply skipped, not emitted as 0.
+  int paused = 0;
+  double pos = 0, dur = 0, vol = 100;
+  if (mpv_get_property(m_mpv, "pause", MPV_FORMAT_FLAG, &paused) >= 0)
+    emit pausedChanged(paused != 0);
+  if (mpv_get_property(m_mpv, "time-pos", MPV_FORMAT_DOUBLE, &pos) >= 0)
+    emit positionChanged(pos);
+  if (mpv_get_property(m_mpv, "duration", MPV_FORMAT_DOUBLE, &dur) >= 0)
+    emit durationChanged(dur);
+  if (mpv_get_property(m_mpv, "volume", MPV_FORMAT_DOUBLE, &vol) >= 0)
+    emit volumeChanged(vol);
+  emit tracksChanged(readTrackList());
+}
+
 // ── Events / property observation ────────────────────────────────────────────
 void MpvObject::on_events(void *ctx) {
   // Called on an mpv-internal thread; hop to the GUI thread to touch the queue.

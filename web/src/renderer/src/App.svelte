@@ -10,7 +10,6 @@
   import type { Stream } from "$lib/types/addons";
   import Player from "./components/Player.svelte";
   import * as Tooltip from "$lib/components/ui/tooltip";
-  import { Maximize2, X } from "lucide-svelte";
   import { setMode } from "mode-watcher";
 
   import type { Page } from "$lib/types/types";
@@ -19,8 +18,7 @@
   import SettingsPage from "./components/SettingsPage.svelte";
   import MyListPage from "./components/MyListPage.svelte";
   import { settings } from "$lib/stores/settings";
-  import { onMount, setContext, tick } from "svelte";
-  import { animate, JSAnimation } from "animejs";
+  import { onMount, setContext } from "svelte";
   import { scale } from "svelte/transition";
   import { cubicOut } from "svelte/easing";
   import {
@@ -62,9 +60,7 @@
   };
 
   let playerSession = $state<PlayerSession | null>(null);
-  let playerMode = $state<"full" | "pip" | null>(null);
-  let playerWrapperEl = $state<HTMLDivElement | null>(null);
-  let playerModeAnimation: JSAnimation | null = null;
+  let playerMode = $state<"full" | null>(null);
 
   const canGoBack = $derived(playerMode === "full" || pageHistory.length > 0);
 
@@ -148,10 +144,10 @@
     // Navigating away dismisses the detail overlay.
     selectedMedia = null;
 
-    // Leaving the page a "full" player is overlaying — pop it out into PiP
-    // instead of leaving it behind to be destroyed.
+    // Navigating away from a full-screen player closes the stream — there's no
+    // PiP to drop it into anymore.
     if (playerMode === "full") {
-      setPlayerMode("pip");
+      closePlayer();
     }
 
     pageHistory.push(currentPage);
@@ -166,11 +162,10 @@
     // Navigating away dismisses the detail overlay.
     selectedMedia = null;
 
-    // While the player is shown full-size, "back" means "leave the player
-    // and reveal the media page underneath," not "go to whatever page was
-    // open before the media page." The media page was never actually left.
+    // While the player is shown full-size, "back" closes the stream and reveals
+    // the page underneath (which was only hidden, never left).
     if (playerMode === "full") {
-      setPlayerMode("pip");
+      closePlayer();
       return;
     }
 
@@ -366,63 +361,10 @@
     startPlayback(media, best, targetSeason, targetEpisode, episodeName);
   }
 
-  // Switches between "full" and "pip" with a quick FLIP-style animation —
-  // measure the player's current box, apply the new layout, then animate
-  // from the old box back to the new one. This sidesteps the fact that the
-  // two modes use different CSS `position` values (absolute vs. fixed),
-  // which plain CSS transitions can't animate between cleanly.
-  async function setPlayerMode(mode: "full" | "pip"): Promise<void> {
-    if (!playerSession || playerMode === mode) {
-      playerMode = mode;
-      return;
-    }
-
-    const el = playerWrapperEl;
-    if (!el) {
-      playerMode = mode;
-      return;
-    }
-
-    const before = el.getBoundingClientRect();
-    playerMode = mode;
-    await tick();
-    const after = el.getBoundingClientRect();
-
-    if (after.width === 0 || after.height === 0) return;
-
-    playerModeAnimation?.pause();
-
-    const dx = before.left - after.left;
-    const dy = before.top - after.top;
-    const scaleX = before.width / after.width;
-    const scaleY = before.height / after.height;
-
-    el.style.transformOrigin = "top left";
-    el.style.transform = `translateX(${dx}px) translateY(${dy}px) scaleX(${scaleX}) scaleY(${scaleY})`;
-
-    playerModeAnimation = animate(el, {
-      translateX: 0,
-      translateY: 0,
-      scaleX: 1,
-      scaleY: 1,
-      duration: 380,
-      easing: "easeOutExpo",
-      complete: () => {
-        el.style.transform = "";
-        el.style.transformOrigin = "";
-      },
-    });
-  }
-
-  function expandPlayer(): void {
-    if (!playerSession) return;
-    setPlayerMode("full");
-  }
-
   // mpv's surface always fills the whole window behind the web UI. Make the app
   // background transparent (revealing it) ONLY while the player is full-size;
   // otherwise keep the app opaque so the full-window video stays hidden behind
-  // the UI in pip mode and after the stream closes.
+  // the UI after the stream closes.
   $effect(() => {
     document.documentElement.classList.toggle(
       "cove-playing",
@@ -449,7 +391,6 @@
       {canGoBack}
       onGoBack={goBack}
       {fullscreenInfo}
-      onMinimizePlayer={() => setPlayerMode("pip")}
       onCloseStream={closePlayer}
       {currentPage}
     />
@@ -505,8 +446,8 @@
     <main class="relative min-h-0 flex-1 overflow-hidden">
       <!-- Hidden (not unmounted) while the player is full, so its opaque page
            background doesn't block the transparent player from revealing mpv,
-           and page state/scroll survive the full↔pip switch. -->
-      <div class="h-full w-full" class:invisible={playerMode === "full"}>
+           and page state/scroll survive opening and closing the player. -->
+      <div class="h-full w-full bg-background" class:invisible={playerMode === "full"}>
         {#if currentPage.type === "settings"}
           <SettingsPage />
         {:else if currentPage.type === "query"}
@@ -533,26 +474,12 @@
 
       {#if playerSession}
         <!--
-          One single, never-remounted <Player> instance. Only its container's
-          position/size change between "full" (overlaying the media page,
-          same as before) and "pip" (a small floating box that survives page
-          navigation) — the component itself is never torn down by switching
-          modes, so playback and the HLS session keep running.
+          One single <Player> instance overlaying the page full-screen. The page
+          underneath is only hidden (not unmounted), so its state/scroll survive;
+          closing the player reveals it again.
         -->
         <div
-          bind:this={playerWrapperEl}
-          class="group z-30 overflow-hidden shadow-2xl transition-[border-radius] duration-300"
-          class:absolute={playerMode === "full"}
-          class:inset-0={playerMode === "full"}
-          class:rounded-xl={playerMode === "full"}
-          class:fixed={playerMode === "pip"}
-          class:right-4={playerMode === "pip"}
-          class:bottom-4={playerMode === "pip"}
-          class:w-md={playerMode === "pip"}
-          class:aspect-video={playerMode === "pip"}
-          class:rounded-lg={playerMode === "pip"}
-          class:ring-1={playerMode === "pip"}
-          class:ring-border={playerMode === "pip"}
+          class="absolute inset-0 z-30 overflow-hidden rounded-xl shadow-2xl"
           transition:scale={{
             duration: 280,
             start: 0.92,
@@ -566,29 +493,7 @@
             externalSubtitles={playerSession.subtitles}
             season={playerSession.season}
             episode={playerSession.episode}
-            compact={playerMode === "pip"}
           />
-
-          {#if playerMode === "pip"}
-            <div
-              class="pointer-events-none absolute top-2 right-2 z-40 flex gap-1 opacity-0 transition-opacity group-hover:opacity-100"
-            >
-              <button
-                class="pointer-events-auto flex size-7 items-center justify-center rounded bg-black/70 text-white transition hover:bg-black/90"
-                onclick={expandPlayer}
-                aria-label="Expand player"
-              >
-                <Maximize2 class="size-4" />
-              </button>
-              <button
-                class="pointer-events-auto flex size-7 items-center justify-center rounded bg-black/70 text-white transition hover:bg-black/90"
-                onclick={closePlayer}
-                aria-label="Close stream"
-              >
-                <X class="size-4" />
-              </button>
-            </div>
-          {/if}
         </div>
       {/if}
     </main>
