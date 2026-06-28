@@ -21,9 +21,9 @@
   let {
     media,
     onclick,
-    quality = null,
-    newEpisodes = false,
-    onwatch,
+    quality: _quality = null,
+    newEpisodes: _newEpisodes = false,
+    onwatch: _onwatch,
   }: {
     media: Media;
     onclick: (m: Media) => void;
@@ -68,8 +68,6 @@
   let runtime = $state<string>("");
   let ageRating = $state<string>("");
   let originCountry = $state<string[]>([]);
-  let numberOfSeasons = $state<number | null>(null);
-  let numberOfEpisodes = $state<number | null>(null);
   let lastAiredSeason = $state<number | null>(null);
   let lastAiredEpisode = $state<number | null>(null);
   let videoUrl = $state<string>();
@@ -97,8 +95,6 @@
         ageRating = formatRating(d);
         originCountry = d.origin_country;
         if (media.media_type === "tv") {
-          numberOfSeasons = d.number_of_seasons ?? null;
-          numberOfEpisodes = d.number_of_episodes ?? null;
           lastAiredSeason = d.last_episode_to_air?.season_number ?? null;
           lastAiredEpisode = d.last_episode_to_air?.episode_number ?? null;
         }
@@ -204,7 +200,6 @@
   });
 
   $effect(() => {
-    // eslint-disable-next-line @typescript-eslint/no-unused-expressions
     $libraryChanged;
     // Skip off-screen cards; the lookup runs once the card becomes visible (and
     // re-runs for visible cards whenever the library changes).
@@ -354,14 +349,9 @@
     {runtime}
     {ageRating}
     {originCountry}
-    {numberOfSeasons}
-    {numberOfEpisodes}
     {lastAiredSeason}
     {lastAiredEpisode}
-    {quality}
     onmouseleave={onLeave}
-    onwatch={(season, episode) =>
-      onwatch ? onwatch(media, season, episode) : openOverlay()}
     onexpand={openOverlay}
     onpopoverchange={(open) => (popoverOpen = open)}
   />

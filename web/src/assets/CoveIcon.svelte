@@ -1,7 +1,4 @@
 <script lang="ts">
-  import { animate, svg } from "animejs";
-  import { onMount } from "svelte";
-
   let { size } = $props();
 </script>
 

@@ -3,12 +3,10 @@
   import { Separator } from "$lib/components/ui/separator/index.js";
   import { animate } from "animejs";
   import { Badge } from "$lib/components/ui/badge/index.js";
-  import * as ButtonGroup from "$lib/components/ui/button-group/index.js";
-  import { Button } from "$lib/components/ui/button";
-  import { ChevronDown, Play, Star } from "lucide-svelte";
-  import { countryName, qualityClass } from "$lib/utils";
+  import { Star } from "lucide-svelte";
+  import { countryName } from "$lib/utils";
   import PlayerSimple from "./PlayerSimple.svelte";
-  import { api, STATUS_LABELS, type LibraryStatus } from "$lib/api";
+  import { api } from "$lib/api";
   import type { LibraryEntry, WatchProgress } from "$lib/types/library";
   import LibraryStatusPanel from "./LibraryStatusPanel.svelte";
   import StarRating from "./StarRating.svelte";
@@ -21,12 +19,8 @@
     runtime,
     ageRating,
     originCountry,
-    numberOfSeasons,
-    numberOfEpisodes,
     lastAiredSeason = null,
     lastAiredEpisode = null,
-    quality,
-    onwatch,
     onexpand,
     onmouseleave,
     onpopoverchange,
@@ -38,12 +32,8 @@
     runtime: string;
     ageRating: string;
     originCountry: string[];
-    numberOfSeasons: number | null;
-    numberOfEpisodes: number | null;
     lastAiredSeason?: number | null;
     lastAiredEpisode?: number | null;
-    quality: string | null;
-    onwatch: (season?: number, episode?: number) => void;
     onexpand: () => void;
     onmouseleave?: (e: MouseEvent) => void;
     onpopoverchange?: (open: boolean) => void;
@@ -95,16 +85,6 @@
   const hasIncompleteProgress = $derived(
     movieProgress !== null && !movieProgress.completed && movieProgressPct > 1,
   );
-
-  // For TV shows show which episode to resume; for movies "Continue" or "Watch".
-  const watchButtonLabel = $derived.by(() => {
-    if (media.media_type === "tv") {
-      const s = libraryEntry?.last_watched_season;
-      const e = libraryEntry?.last_watched_episode;
-      if (s != null && e != null) return `Continue S${s}E${e}`;
-    }
-    return hasIncompleteProgress ? "Continue" : "Watch";
-  });
 
   // Animate in when mounted
   $effect(() => {

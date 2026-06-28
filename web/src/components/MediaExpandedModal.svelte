@@ -76,7 +76,6 @@
   // live `media` prop (e.g. after a library status change) can't make the
   // overview text silently vanish.
   let detailsOverview = $state<string | null>(null);
-  let notInterested = $state(false);
 
 
   $effect(() => {
