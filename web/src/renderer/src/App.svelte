@@ -448,28 +448,31 @@
            background doesn't block the transparent player from revealing mpv,
            and page state/scroll survive opening and closing the player. -->
       <div class="h-full w-full bg-background" class:invisible={playerMode === "full"}>
-        {#if currentPage.type === "settings"}
-          <SettingsPage />
-        {:else if currentPage.type === "query"}
-          <QueryPage
-            bind:query
-            bind:loading
-            onSelectMedia={selectMedia}
-            onSuggested={(name: string) => {
-              query = name;
-              changePage({ type: "query", query: name });
-            }}
-            onWatch={quickPlay}
-            onSelectPerson={(p: Person) => (selectedPerson = p)}
-            onSelectProvider={(p: Provider) => (selectedProvider = p)}
-          />
-        {:else if currentPage.type === "home"}
-          <HomePage onSelectMedia={selectMedia} onWatch={quickPlay} />
-        {:else if currentPage.type === "insights"}
-          <InsightsPage />
-        {:else if currentPage.type === "myList"}
-          <MyListPage onSelectMedia={selectMedia} onWatch={quickPlay} />
-        {/if}
+        <div class="h-full w-full bg-background" class:invisible={playerMode === "full"}>
+          <div class="h-full" class:hidden={currentPage.type !== "settings"}>
+            <SettingsPage />
+          </div>
+          <div class="h-full" class:hidden={currentPage.type !== "query"}>
+            <QueryPage
+                    bind:query
+                    bind:loading
+                    onSelectMedia={selectMedia}
+                    onSuggested={(name) => { query = name; changePage({ type: "query", query: name }); }}
+                    onWatch={quickPlay}
+                    onSelectPerson={(p) => (selectedPerson = p)}
+                    onSelectProvider={(p) => (selectedProvider = p)}
+            />
+          </div>
+          <div class="h-full" class:hidden={currentPage.type !== "home"}>
+            <HomePage onSelectMedia={selectMedia} onWatch={quickPlay} />
+          </div>
+          <div class="h-full" class:hidden={currentPage.type !== "insights"}>
+            <InsightsPage />
+          </div>
+          <div class="h-full" class:hidden={currentPage.type !== "myList"}>
+            <MyListPage onSelectMedia={selectMedia} onWatch={quickPlay} />
+          </div>
+        </div>
       </div>
 
       {#if playerSession}
