@@ -10,6 +10,7 @@
     type ContinueItem,
   } from "./cards/ContinueWatchingCard.svelte";
   import { SvelteDate, SvelteMap } from "svelte/reactivity";
+  import { animate } from "animejs";
 
   // Resume is the point of this row, so we take onWatch. onSelectMedia is the
   // fallback (open details) when no player handler is wired.
@@ -226,11 +227,18 @@
     }
   }
 
+  let activeAnim: ReturnType<typeof animate> | null = null;
+
   function scrollByCards(direction: 1 | -1): void {
     if (!trackEl) return;
-    trackEl.scrollBy({
-      left: direction * (trackEl.clientWidth * 0.9),
-      behavior: "smooth",
+    activeAnim?.pause();
+
+    const target = trackEl.scrollLeft + direction * (trackEl.clientWidth * 0.9);
+
+    activeAnim = animate(trackEl, {
+      scrollLeft: target,
+      duration: 400,
+      ease: "inOutQuad",
     });
   }
 </script>
@@ -254,7 +262,6 @@
       <div
         bind:this={trackEl}
         class="flex min-w-0 flex-1 gap-4 overflow-x-auto px-1 pb-1 [&::-webkit-scrollbar]:hidden"
-        style="scroll-snap-type: x mandatory;"
       >
         {#if loading}
           {#each { length: 5 } as _, i (i)}
