@@ -1,6 +1,6 @@
 {
   "name": "cove-web",
-  "version": "0.11.3",
+  "version": "0.11.4",
   "description": "Cove frontend (Svelte + TypeScript), served by the Qt shell.",
   "private": true,
   "type": "module",
