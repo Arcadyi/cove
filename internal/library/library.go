@@ -581,6 +581,7 @@ func (l *Library) handleItem(w http.ResponseWriter, r *http.Request) {
 	case sub == "" && r.Method == http.MethodGet:
 		l.mu.RLock()
 		entry := l.db.Entries[key]
+		_, dismissed := l.db.Dismissed[key]
 		var progList []*WatchProgress
 		for _, p := range l.db.Progress {
 			if p.TmdbID == tmdbID && p.MediaType == mediaType {
@@ -596,7 +597,7 @@ func (l *Library) handleItem(w http.ResponseWriter, r *http.Request) {
 		if progList == nil {
 			progList = []*WatchProgress{}
 		}
-		jsonOK(w, map[string]any{"entry": entry, "progress": progList})
+		jsonOK(w, map[string]any{"entry": entry, "progress": progList, "dismissed": dismissed})
 
 	// ── DELETE /api/library/{id}/{type} ───────────────────────────────────────
 	case sub == "" && r.Method == http.MethodDelete:

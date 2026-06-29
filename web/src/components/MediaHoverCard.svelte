@@ -3,13 +3,14 @@
   import { Separator } from "$lib/components/ui/separator/index.js";
   import { animate } from "animejs";
   import { Badge } from "$lib/components/ui/badge/index.js";
-  import { Star } from "lucide-svelte";
+  import { Star, ThumbsDown } from "lucide-svelte";
   import { countryName } from "$lib/utils";
   import PlayerSimple from "./PlayerSimple.svelte";
   import { api } from "$lib/api";
   import type { LibraryEntry, WatchProgress } from "$lib/types/library";
   import LibraryStatusPanel from "./LibraryStatusPanel.svelte";
   import StarRating from "./StarRating.svelte";
+  import { Button } from "$lib/components/ui/button/index.js";
 
   let {
     media,
@@ -58,6 +59,7 @@
 
   let libraryEntry = $state<LibraryEntry | null>(null);
   let movieProgress = $state<WatchProgress | null>(null);
+  let dismissed = $state(false);
 
   $effect(() => {
     api
@@ -65,12 +67,24 @@
       .then((result) => {
         if (!result) return;
         libraryEntry = result.entry;
+        dismissed = result.dismissed;
         if (media.media_type === "movie") {
           movieProgress = result.progress[0] ?? null;
         }
       })
       .catch(console.error);
   });
+
+  async function toggleDismissed(): Promise<void> {
+    const next = !dismissed;
+    dismissed = next;
+    try {
+      if (next) await api.notInterested(media);
+      else await api.undoNotInterested(media);
+    } catch {
+      dismissed = !next; // revert on error
+    }
+  }
 
   const movieProgressPct = $derived(
     movieProgress && movieProgress.duration_seconds > 0
@@ -203,16 +217,26 @@
         />
       </span>
 
-      <!-- svelte-ignore a11y_no_static_element_interactions a11y_click_events_have_key_events -->
-      <span class="contents" onclick={(e) => e.stopPropagation()}>
-        <LibraryStatusPanel
-          {libraryEntry}
-          {media}
-          {lastAiredSeason}
-          {lastAiredEpisode}
-          size="icon-lg"
-          {onpopoverchange}
-        />
+      <span class="flex items-center gap-1" onclick={(e) => e.stopPropagation()} role="presentation">
+        <Button
+          variant={dismissed ? "destructive" : "outline"}
+          size="icon"
+          onclick={toggleDismissed}
+          title={dismissed ? "Undo not interested" : "Not interested"}
+        >
+          <ThumbsDown class="size-4" />
+        </Button>
+        <!-- svelte-ignore a11y_no_static_element_interactions a11y_click_events_have_key_events -->
+        <span class="contents">
+          <LibraryStatusPanel
+            {libraryEntry}
+            {media}
+            {lastAiredSeason}
+            {lastAiredEpisode}
+            size="icon-lg"
+            {onpopoverchange}
+          />
+        </span>
       </span>
     </span>
   </span>

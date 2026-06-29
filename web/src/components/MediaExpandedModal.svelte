@@ -5,7 +5,7 @@
   import { animate } from "animejs";
   import { Badge } from "$lib/components/ui/badge/index.js";
   import { Button } from "$lib/components/ui/button";
-  import { ChevronDown, ListVideo, Play, Star, X } from "lucide-svelte";
+  import { ChevronDown, ListVideo, Play, Star, ThumbsDown, X } from "lucide-svelte";
   import {
     countryName,
     formatRating,
@@ -154,6 +154,7 @@
   let libraryEntry = $state<LibraryEntry | null>(null);
   let movieProgress = $state<WatchProgress | null>(null);
   let tvProgressList = $state<WatchProgress[]>([]);
+  let dismissed = $state(false);
 
   $effect(() => {
     api
@@ -163,9 +164,11 @@
           libraryEntry = null;
           movieProgress = null;
           tvProgressList = [];
+          dismissed = false;
           return;
         }
         libraryEntry = result.entry;
+        dismissed = result.dismissed;
         if (media.media_type === "movie") {
           movieProgress = result.progress[0] ?? null;
         } else {
@@ -174,6 +177,17 @@
       })
       .catch(console.error);
   });
+
+  async function toggleDismissed(): Promise<void> {
+    const next = !dismissed;
+    dismissed = next;
+    try {
+      if (next) await api.notInterested(media);
+      else await api.undoNotInterested(media);
+    } catch {
+      dismissed = !next;
+    }
+  }
 
   const movieProgressPct = $derived(
     movieProgress && movieProgress.duration_seconds > 0
@@ -354,6 +368,14 @@
                 {lastAiredSeason}
                 {lastAiredEpisode}
               />
+              <Button
+                variant={dismissed ? "destructive" : "outline"}
+                size="icon"
+                onclick={toggleDismissed}
+                title={dismissed ? "Undo not interested" : "Not interested"}
+              >
+                <ThumbsDown class="size-4" />
+              </Button>
               <LibraryStatusPanel
                 {libraryEntry}
                 {media}

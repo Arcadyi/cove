@@ -477,6 +477,7 @@ export const api = {
   ): Promise<{
     entry: LibraryEntry | null;
     progress: WatchProgress[];
+    dismissed: boolean;
   } | null> => requestOrNull(`/library/${tmdbId}/${mediaType}`),
 
   libraryRemove: (tmdbId: number, mediaType: string): Promise<void> =>
