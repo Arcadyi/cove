@@ -23,4 +23,9 @@ curl -LO https://github.com/Arcadyi/cove/releases/latest/download/PKGBUILD
 makepkg -si
 ```
 
+```shell
+# to download and install automatically
+cd "$(mktemp -d)" && curl -LO https://github.com/Arcadyi/cove/releases/latest/download/PKGBUILD && makepkg -si
+```
+
 This installs Cove as a native pacman package. Update it the same way — download the new `PKGBUILD` from the next release and run `makepkg -si` again.

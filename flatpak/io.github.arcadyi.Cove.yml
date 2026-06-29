@@ -52,17 +52,15 @@ modules:
         tag: n7.1
 
   # mpv: video player library used by the Qt shell (MpvObject).
-  # 0.37.0 uses waf and does not hard-require libplacebo (required since 0.38.0).
-  # libplacebo ≥ 0.38.0 pulls in meson subprojects (jinja2, glad, …) via wrap
-  # files that download from the internet at build time, which is unavailable
-  # inside the Flatpak sandbox on CI runners.
+  # 0.37.0 uses meson but libplacebo is still optional there (required since
+  # 0.38.0). Without libplacebo installed, meson skips it rather than failing,
+  # so we avoid the subproject-download issue that broke 0.38.0 in CI.
   - name: mpv
-    buildsystem: simple
-    build-commands:
-      - python3 waf configure --prefix=/app --enable-libmpv-shared
-          --disable-alsa --disable-manpage-build --disable-pdf-build
-      - python3 waf -j4
-      - python3 waf install
+    buildsystem: meson
+    config-opts:
+      - -Dlibmpv=true
+      - -Dbuild-date=false
+      - -Dvapoursynth=disabled
     sources:
       - type: git
         url: https://github.com/mpv-player/mpv.git
