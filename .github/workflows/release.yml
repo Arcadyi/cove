@@ -185,30 +185,28 @@ jobs:
           APPIMAGE_EXTRACT_AND_RUN: '1'
         run: |
           export QMAKE=$(which qmake6)
-          # QMLPATHS tells linuxdeploy-plugin-qt which QML files to scan for
-          # imports. Without it the plugin won't know to copy QtWebEngine.
           export QMLPATHS=$(pwd)/qt/qml
-          ./linuxdeploy-x86_64.AppImage \
-            --appdir AppDir \
-            --executable AppDir/usr/bin/cove_shell \
-            --desktop-file AppDir/usr/share/applications/cove.desktop \
-            --icon-file cove.png \
-            --plugin qt
-
-          # linuxdeploy-plugin-qt's QML scanner can still miss QtWebEngine
-          # because it's split across several sub-modules in Qt6. Copy them
-          # explicitly as a belt-and-suspenders guarantee.
+          LIB_DIR=$(qmake6 -query QT_INSTALL_LIBS)
           QML_DIR=$(qmake6 -query QT_INSTALL_QML)
           PLUGINS_DIR=$(qmake6 -query QT_INSTALL_PLUGINS)
-          mkdir -p AppDir/usr/qml AppDir/usr/plugins/platforms \
+
+          # Pre-copy WebEngine QML module directories before linuxdeploy runs.
+          # cove_shell doesn't directly link libQt6WebEngineQuick — Qt loads it
+          # at runtime via the QML plugin system — so ELF scanning alone misses
+          # it. We also pass the libraries explicitly via --library below so
+          # linuxdeploy resolves their transitive deps (e.g. WebEngineCore).
+          mkdir -p AppDir/usr/qml
+          for mod in QtWebEngine QtWebEngineQuick QtWebEngineCore; do
+            [ -d "$QML_DIR/$mod" ] && cp -r "$QML_DIR/$mod" AppDir/usr/qml/
+          done
+
+          # Pre-copy Wayland Qt plugins. The libwayland-* system libraries are
+          # intentionally excluded below (compositor ABI — must be system libs).
+          mkdir -p AppDir/usr/plugins/platforms \
                    AppDir/usr/plugins/wayland-decoration-client \
                    AppDir/usr/plugins/wayland-graphics-integration-client \
                    AppDir/usr/plugins/wayland-shell-integration
-          for mod in QtWebEngine QtWebEngineQuick QtWebEngineCore; do
-            [ -d "$QML_DIR/$mod" ] && cp -rn "$QML_DIR/$mod" AppDir/usr/qml/
-          done
-          # Wayland platform + supporting plugins (needed on Wayland desktops)
-          cp -n "$PLUGINS_DIR/platforms"/libqwayland*.so \
+          cp "$PLUGINS_DIR/platforms"/libqwayland*.so \
                AppDir/usr/plugins/platforms/ 2>/dev/null || true
           for dir in wayland-decoration-client \
                      wayland-graphics-integration-client \
@@ -216,6 +214,20 @@ jobs:
             [ -d "$PLUGINS_DIR/$dir" ] && \
               cp -rn "$PLUGINS_DIR/$dir/." "AppDir/usr/plugins/$dir/"
           done
+
+          ./linuxdeploy-x86_64.AppImage \
+            --appdir AppDir \
+            --executable AppDir/usr/bin/cove_shell \
+            --library "$LIB_DIR/libQt6WebEngineQuick.so.6" \
+            --library "$LIB_DIR/libQt6WebEngineCore.so.6" \
+            --desktop-file AppDir/usr/share/applications/cove.desktop \
+            --icon-file cove.png \
+            --plugin qt
+
+          # libwayland-* has compositor-version coupling: bundling the wrong
+          # version breaks socket protocol with the running compositor. Remove
+          # any copies linuxdeploy pulled in; the system provides these.
+          rm -f AppDir/usr/lib/libwayland*.so* 2>/dev/null || true
 
       - name: Create AppImage
         env:
