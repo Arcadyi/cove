@@ -16,6 +16,7 @@ package() {
     install -Dm755 "${srcdir}/bin/cove"                "${pkgdir}/usr/bin/cove"
     install -Dm755 "${srcdir}/lib/cove/cove"           "${pkgdir}/usr/lib/cove/cove"
     install -Dm755 "${srcdir}/lib/cove/cove_shell"     "${pkgdir}/usr/lib/cove/cove_shell"
+    mkdir -p "${pkgdir}/usr/share/cove"
     cp -r "${srcdir}/share/cove/web"                   "${pkgdir}/usr/share/cove/"
     install -Dm644 "${srcdir}/share/applications/io.github.arcadyi.Cove.desktop" \
                    "${pkgdir}/usr/share/applications/io.github.arcadyi.Cove.desktop"
