@@ -174,13 +174,13 @@ func (m *Manager) FetchSubtitles(addonURL string, mediaType string, id string) (
 	return data.Subtitles, nil
 }
 
-func (m *Manager) SetupHandlers(imdbLookup func(tmdbID int) string) {
+func (m *Manager) SetupHandlers(mux *http.ServeMux, imdbLookup func(tmdbID int) string) {
 	m.imdbLookup = imdbLookup
 	// GET  /api/addons          — list all addons
 	// POST /api/addons          — add stremio addon (body: {"url":"..."})
 	// PATCH /api/addons?id=X   — toggle enabled (body: {"enabled":true})
 	// DELETE /api/addons?id=X  — remove stremio addon
-	http.HandleFunc("/api/addons", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/addons", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodGet:
 			w.Header().Set("Content-Type", "application/json")
@@ -245,7 +245,7 @@ func (m *Manager) SetupHandlers(imdbLookup func(tmdbID int) string) {
 	}))
 
 	// GET /api/timestamps?id=<tmdbID>&season=1&episode=2
-	http.HandleFunc("/api/timestamps", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/timestamps", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
@@ -287,7 +287,7 @@ func (m *Manager) SetupHandlers(imdbLookup func(tmdbID int) string) {
 	}))
 
 	// GET /api/watch-options?id=<tmdbID>&type=movie|tv
-	http.HandleFunc("/api/watch-options", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/watch-options", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return

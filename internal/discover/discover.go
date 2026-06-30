@@ -621,15 +621,15 @@ func voteFloor(mediaType string) float64 {
 
 // ── HTTP handlers ─────────────────────────────────────────────────────────────
 
-func (s *Service) SetupHandlers() {
-	http.HandleFunc("/api/discover", utils.CorsMiddleware(s.handleRecommend))
-	http.HandleFunc("/api/discover/genres", utils.CorsMiddleware(s.handleTopGenres))
-	http.HandleFunc("/api/discover/keywords", utils.CorsMiddleware(s.handleTopKeywords))
-	http.HandleFunc("/api/discover/genre", utils.CorsMiddleware(s.handleByGenre))
-	http.HandleFunc("/api/discover/keyword", utils.CorsMiddleware(s.handleByKeyword))
+func (s *Service) SetupHandlers(mux *http.ServeMux) {
+	mux.HandleFunc("/api/discover", utils.CorsMiddleware(s.handleRecommend))
+	mux.HandleFunc("/api/discover/genres", utils.CorsMiddleware(s.handleTopGenres))
+	mux.HandleFunc("/api/discover/keywords", utils.CorsMiddleware(s.handleTopKeywords))
+	mux.HandleFunc("/api/discover/genre", utils.CorsMiddleware(s.handleByGenre))
+	mux.HandleFunc("/api/discover/keyword", utils.CorsMiddleware(s.handleByKeyword))
 	// Static TMDB genre list (id+name) for building browse UIs / kid-mode pickers.
-	http.HandleFunc("/api/genres", utils.CorsMiddleware(s.handleGenreList))
-	http.HandleFunc("/api/discover/insights", utils.CorsMiddleware(s.handleInsights))
+	mux.HandleFunc("/api/genres", utils.CorsMiddleware(s.handleGenreList))
+	mux.HandleFunc("/api/discover/insights", utils.CorsMiddleware(s.handleInsights))
 }
 
 // GET /api/discover?type=movie|tv|all&limit=20&profile=kid

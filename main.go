@@ -101,29 +101,31 @@ func main() {
 		log.Fatal("could not init torrent client:", err)
 	}
 
-	addonMgr.SetupHandlers(func(tmdbID int) string {
+	mux := http.DefaultServeMux
+
+	addonMgr.SetupHandlers(mux, func(tmdbID int) string {
 		id, err := tmdbClient.GetTVIMDBId(tmdbID)
 		if err != nil {
 			return ""
 		}
 		return id
 	})
-	tmdbClient.SetupHandlers(addonMgr)
-	p.SetupHandlers()
-	st.SetupHandlers()
-	lib.SetupHandlers()
-	profileStore.SetupHandlers()
-	updater.SetupHandlers(Version)
+	tmdbClient.SetupHandlers(mux, addonMgr)
+	p.SetupHandlers(mux)
+	st.SetupHandlers(mux)
+	lib.SetupHandlers(mux)
+	profileStore.SetupHandlers(mux)
+	updater.SetupHandlers(mux, Version)
 
 	// Supabase auth + sync (no-op if SUPABASE_URL is not set).
 	// Env vars take precedence; compiled-in ldflags values are the fallback for
 	// release builds where no .env file is present.
 	supaCfg := supapkg.ConfigFromEnv(SupabaseURL, SupabaseAnonKey, SupabaseServiceKey, SupabaseJWTSecret)
 	supaServer := supapkg.NewServer(supaCfg, profileStore, lib, st, addonMgr)
-	supaServer.SetupHandlers()
+	supaServer.SetupHandlers(mux)
 
 	disc := discover.New(tmdbClient, lib)
-	disc.SetupHandlers()
+	disc.SetupHandlers(mux)
 
 	go func() {
 		ticker := time.NewTicker(30 * time.Minute)
@@ -133,7 +135,7 @@ func main() {
 		}
 	}()
 
-	http.HandleFunc("/api/ping", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/ping", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		err := json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 		if err != nil {

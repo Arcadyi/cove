@@ -346,9 +346,9 @@ func extractTarGz(r io.Reader, destDir string) error {
 	return nil
 }
 
-// SetupHandlers registers /api/update/check and /api/update/apply.
-func SetupHandlers(currentVersion string) {
-	http.HandleFunc("/api/update/check", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
+// SetupHandlers registers /api/update/check and /api/update/apply on mux.
+func SetupHandlers(mux *http.ServeMux, currentVersion string) {
+	mux.HandleFunc("/api/update/check", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		result, err := check(currentVersion)
 		if err != nil {
 			log.Println("[updater] check error:", err)
@@ -359,7 +359,7 @@ func SetupHandlers(currentVersion string) {
 		json.NewEncoder(w).Encode(result)
 	}))
 
-	http.HandleFunc("/api/update/apply", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/update/apply", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return

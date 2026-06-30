@@ -33,16 +33,16 @@ func NewServer(
 	return &Server{cfg: cfg, profileStore: ps, lib: lib, st: st, addonMgr: mgr}
 }
 
-// SetupHandlers registers all /api/auth/* endpoints.
-func (s *Server) SetupHandlers() {
-	http.HandleFunc("/api/auth/register", utils.CorsMiddleware(s.handleRegister))
-	http.HandleFunc("/api/auth/register/confirm", utils.CorsMiddleware(s.handleConfirmRegistration))
-	http.HandleFunc("/api/auth/login", utils.CorsMiddleware(s.handleLogin))
-	http.HandleFunc("/api/auth/otp", utils.CorsMiddleware(s.handleOTP))
-	http.HandleFunc("/api/auth/verify-otp", utils.CorsMiddleware(s.handleVerifyOTP))
-	http.HandleFunc("/api/auth/logout", utils.CorsMiddleware(s.handleLogout))
-	http.HandleFunc("/api/auth/me", utils.CorsMiddleware(s.handleMe))
-	http.HandleFunc("/api/auth/sync", utils.CorsMiddleware(s.handleSync))
+// SetupHandlers registers all /api/auth/* endpoints on mux.
+func (s *Server) SetupHandlers(mux *http.ServeMux) {
+	mux.HandleFunc("/api/auth/register", utils.CorsMiddleware(s.handleRegister))
+	mux.HandleFunc("/api/auth/register/confirm", utils.CorsMiddleware(s.handleConfirmRegistration))
+	mux.HandleFunc("/api/auth/login", utils.CorsMiddleware(s.handleLogin))
+	mux.HandleFunc("/api/auth/otp", utils.CorsMiddleware(s.handleOTP))
+	mux.HandleFunc("/api/auth/verify-otp", utils.CorsMiddleware(s.handleVerifyOTP))
+	mux.HandleFunc("/api/auth/logout", utils.CorsMiddleware(s.handleLogout))
+	mux.HandleFunc("/api/auth/me", utils.CorsMiddleware(s.handleMe))
+	mux.HandleFunc("/api/auth/sync", utils.CorsMiddleware(s.handleSync))
 }
 
 func (s *Server) notConfigured(w http.ResponseWriter) {

@@ -2,6 +2,8 @@ name: CI
 
 on:
   push:
+    branches:
+      - '**'
     tags:
       - 'v*'
 
@@ -9,9 +11,23 @@ permissions:
   contents: write  # needed for the package job to upload release assets
 
 jobs:
+  test:
+    name: Go test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Test
+        run: go test ./...
+
   go:
     name: Go build
     runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
     steps:
       - uses: actions/checkout@v4
 
@@ -30,6 +46,7 @@ jobs:
   web:
     name: Web build + typecheck
     runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
     defaults:
       run:
         working-directory: web
@@ -60,6 +77,7 @@ jobs:
   qt:
     name: Qt shell build (Linux, best-effort)
     runs-on: ubuntu-24.04
+    if: startsWith(github.ref, 'refs/tags/v')
     # Qt6 WebEngine and libmpv availability in CI runners can vary — treat as
     # non-blocking until the build is known stable in this environment.
     continue-on-error: true

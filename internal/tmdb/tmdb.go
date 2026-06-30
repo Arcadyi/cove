@@ -1143,8 +1143,8 @@ func (c *Client) SuggestKeywords(query string) ([]Keyword, error) {
 	return data.Results, nil
 }
 
-func (c *Client) SetupHandlers(addonMgr *addons.Manager) {
-	http.HandleFunc("/api/keywords", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
+func (c *Client) SetupHandlers(mux *http.ServeMux, addonMgr *addons.Manager) {
+	mux.HandleFunc("/api/keywords", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		query := r.URL.Query().Get("q")
 		if query == "" {
 			http.Error(w, "missing query", http.StatusBadRequest)
@@ -1161,7 +1161,7 @@ func (c *Client) SetupHandlers(addonMgr *addons.Manager) {
 		}
 	}))
 
-	http.HandleFunc("/api/search", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/search", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		query := r.URL.Query().Get("q")
 		if query == "" {
 			http.Error(w, "missing query", http.StatusBadRequest)
@@ -1199,7 +1199,7 @@ func (c *Client) SetupHandlers(addonMgr *addons.Manager) {
 
 	// GET /api/search/multi?q=<query> — sectioned results (titles split into
 	// movies/tv, plus people and providers).
-	http.HandleFunc("/api/search/multi", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/search/multi", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		query := r.URL.Query().Get("q")
 		if query == "" {
 			http.Error(w, "missing query", http.StatusBadRequest)
@@ -1219,7 +1219,7 @@ func (c *Client) SetupHandlers(addonMgr *addons.Manager) {
 	}))
 
 	// GET /api/person?id=<personID> — bio + filmography for the person overlay.
-	http.HandleFunc("/api/person", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/person", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		id, err := strconv.Atoi(r.URL.Query().Get("id"))
 		if err != nil {
 			http.Error(w, "invalid id", http.StatusBadRequest)
@@ -1238,7 +1238,7 @@ func (c *Client) SetupHandlers(addonMgr *addons.Manager) {
 
 	// GET /api/provider?id=<providerID>&limit=<n> — popular titles on a provider
 	// (US region). Blends movies and TV.
-	http.HandleFunc("/api/provider", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/provider", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		id, err := strconv.Atoi(r.URL.Query().Get("id"))
 		if err != nil {
 			http.Error(w, "invalid id", http.StatusBadRequest)
@@ -1259,7 +1259,7 @@ func (c *Client) SetupHandlers(addonMgr *addons.Manager) {
 		}
 	}))
 
-	http.HandleFunc("/api/images", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/images", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		tmdbIDStr := r.URL.Query().Get("id")
 		mediaType := r.URL.Query().Get("type")
 
@@ -1293,7 +1293,7 @@ func (c *Client) SetupHandlers(addonMgr *addons.Manager) {
 		}
 	}))
 
-	http.HandleFunc("/api/videos", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/videos", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		tmdbIDStr := r.URL.Query().Get("id")
 		mediaType := r.URL.Query().Get("type")
 
@@ -1331,7 +1331,7 @@ func (c *Client) SetupHandlers(addonMgr *addons.Manager) {
 	// Returns a single, fully-populated Media object by ID — for callers that
 	// only have a bare tmdb_id (e.g. from a LibraryEntry) and need the real
 	// TMDB object rather than reconstructing a partial one client-side.
-	http.HandleFunc("/api/media", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/media", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		tmdbIDStr := r.URL.Query().Get("id")
 		mediaType := r.URL.Query().Get("type")
 
@@ -1362,7 +1362,7 @@ func (c *Client) SetupHandlers(addonMgr *addons.Manager) {
 		}
 	}))
 
-	http.HandleFunc("/api/details", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/details", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		tmdbID := r.URL.Query().Get("id")
 		mediaType := r.URL.Query().Get("type")
 		id := 0
@@ -1382,7 +1382,7 @@ func (c *Client) SetupHandlers(addonMgr *addons.Manager) {
 		}
 	}))
 
-	http.HandleFunc("/api/similar", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/similar", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		id, _ := strconv.Atoi(r.URL.Query().Get("id"))
 		mediaType := r.URL.Query().Get("type")
 		results, err := c.GetSimilar(id, mediaType)
@@ -1398,7 +1398,7 @@ func (c *Client) SetupHandlers(addonMgr *addons.Manager) {
 		}
 	}))
 
-	http.HandleFunc("/api/logos", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/logos", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		tmdbID := r.URL.Query().Get("id")
 		mediaType := r.URL.Query().Get("type")
 		id := 0
@@ -1418,7 +1418,7 @@ func (c *Client) SetupHandlers(addonMgr *addons.Manager) {
 		}
 	}))
 
-	http.HandleFunc("/api/imdb", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/imdb", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		tmdbID := r.URL.Query().Get("id")
 		id := 0
 		_, err := fmt.Sscanf(tmdbID, "%d", &id)
@@ -1440,7 +1440,7 @@ func (c *Client) SetupHandlers(addonMgr *addons.Manager) {
 
 	// GET /api/tv/seasons?id=<tmdbID>
 	// Returns the list of seasons for a TV show.
-	http.HandleFunc("/api/tv/seasons", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/tv/seasons", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		tmdbID := r.URL.Query().Get("id")
 		id := 0
 		if _, err := fmt.Sscanf(tmdbID, "%d", &id); err != nil {
@@ -1460,7 +1460,7 @@ func (c *Client) SetupHandlers(addonMgr *addons.Manager) {
 
 	// GET /api/tv/episodes?id=<tmdbID>&season=<seasonNumber>
 	// Returns the episodes for a given season of a TV show.
-	http.HandleFunc("/api/tv/episodes", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/tv/episodes", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		tmdbID := r.URL.Query().Get("id")
 		seasonStr := r.URL.Query().Get("season")
 		id := 0
@@ -1484,7 +1484,7 @@ func (c *Client) SetupHandlers(addonMgr *addons.Manager) {
 		}
 	}))
 
-	http.HandleFunc("/api/quality/batch", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/quality/batch", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		idsParam := r.URL.Query().Get("ids")
 		if idsParam == "" {
 			http.Error(w, "missing ids", http.StatusBadRequest)

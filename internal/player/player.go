@@ -269,8 +269,8 @@ func NewServer(addr string) *http.Server {
 	}
 }
 
-func (p *Player) SetupHandlers() {
-	http.HandleFunc("/api/subtitles", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
+func (p *Player) SetupHandlers(mux *http.ServeMux) {
+	mux.HandleFunc("/api/subtitles", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		tmdbID := r.URL.Query().Get("id")
 		mediaType := r.URL.Query().Get("type")
 		id := 0
@@ -313,7 +313,7 @@ func (p *Player) SetupHandlers() {
 	}))
 
 	// /api/streams?id=<tmdbID>&type=movie|tv[&season=N&episode=N]
-	http.HandleFunc("/api/streams", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/streams", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		tmdbID := r.URL.Query().Get("id")
 		mediaType := r.URL.Query().Get("type")
 		if mediaType == "" {
@@ -365,7 +365,7 @@ func (p *Player) SetupHandlers() {
 		}
 	}))
 
-	http.HandleFunc("/api/play", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/play", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		infoHash := r.URL.Query().Get("hash")
 		streamURL := r.URL.Query().Get("url")
 
@@ -386,7 +386,7 @@ func (p *Player) SetupHandlers() {
 	}))
 
 	// Legacy polling endpoint — kept for compatibility; prefer /api/progress/stream (SSE).
-	http.HandleFunc("/api/progress", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/progress", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		hash := r.URL.Query().Get("hash")
 		err := json.NewEncoder(w).Encode(p.GetProgress(hash))
 		if err != nil {
@@ -394,7 +394,7 @@ func (p *Player) SetupHandlers() {
 		}
 	}))
 
-	http.HandleFunc("/api/progress/stream", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/progress/stream", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		hash := r.URL.Query().Get("hash")
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.Header().Set("Cache-Control", "no-cache")
@@ -426,7 +426,7 @@ func (p *Player) SetupHandlers() {
 	// measure raw download throughput for the "Match My Internet Speed"
 	// stream-selection mode. Not a rigorous benchmark (single connection,
 	// no compression, local network only) but good enough as a rough guide.
-	http.HandleFunc("/api/speedtest", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/speedtest", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		const payloadSize = 25 * 1024 * 1024 // 25 MiB
 		w.Header().Set("Content-Type", "application/octet-stream")
 		w.Header().Set("Content-Length", strconv.Itoa(payloadSize))
@@ -449,7 +449,7 @@ func (p *Player) SetupHandlers() {
 		}
 	}))
 
-	http.HandleFunc("/api/subtitle-proxy", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/subtitle-proxy", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		rawURL := r.URL.Query().Get("url")
 		if rawURL == "" {
 			http.Error(w, "missing url", http.StatusBadRequest)

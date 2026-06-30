@@ -392,14 +392,14 @@ func newUUID() string {
 
 // ── SetupHandlers ─────────────────────────────────────────────────────────────
 
-func (l *Library) SetupHandlers() {
+func (l *Library) SetupHandlers(mux *http.ServeMux) {
 	// /api/library/progress must be registered before /api/library/ so Go's mux
 	// matches it as the more-specific fixed path.
-	http.HandleFunc("/api/library/progress", utils.CorsMiddleware(l.handleProgress))
-	http.HandleFunc("/api/library", utils.CorsMiddleware(l.handleCollection))
-	http.HandleFunc("/api/library/", utils.CorsMiddleware(l.handleItem))
-	http.HandleFunc("/api/library/dismiss", utils.CorsMiddleware(l.handleDismiss))
-	http.HandleFunc("/api/library/stats", utils.CorsMiddleware(l.handleStats))
+	mux.HandleFunc("/api/library/progress", utils.CorsMiddleware(l.handleProgress))
+	mux.HandleFunc("/api/library", utils.CorsMiddleware(l.handleCollection))
+	mux.HandleFunc("/api/library/", utils.CorsMiddleware(l.handleItem))
+	mux.HandleFunc("/api/library/dismiss", utils.CorsMiddleware(l.handleDismiss))
+	mux.HandleFunc("/api/library/stats", utils.CorsMiddleware(l.handleStats))
 }
 
 // ── Handler: /api/library ─────────────────────────────────────────────────────

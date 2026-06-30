@@ -233,10 +233,10 @@ func ProfileFileName(base, profileID string) string {
 	return base + "-" + profileID + ".json"
 }
 
-// SetupHandlers registers profile CRUD endpoints.
-func (s *Store) SetupHandlers() {
-	http.HandleFunc("/api/profiles", utils.CorsMiddleware(s.handleList))
-	http.HandleFunc("/api/profiles/", utils.CorsMiddleware(s.handleByID))
+// SetupHandlers registers profile CRUD endpoints on mux.
+func (s *Store) SetupHandlers(mux *http.ServeMux) {
+	mux.HandleFunc("/api/profiles", utils.CorsMiddleware(s.handleList))
+	mux.HandleFunc("/api/profiles/", utils.CorsMiddleware(s.handleByID))
 }
 
 func jsonOK(w http.ResponseWriter, v any) {

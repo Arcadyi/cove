@@ -158,9 +158,9 @@ func (s *Store) SetProfile(profileID string) error {
 	return nil
 }
 
-// SetupHandlers registers GET/PUT /api/settings.
-func (s *Store) SetupHandlers() {
-	http.HandleFunc("/api/settings", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
+// SetupHandlers registers GET/PUT /api/settings on mux.
+func (s *Store) SetupHandlers(mux *http.ServeMux) {
+	mux.HandleFunc("/api/settings", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodOptions {
 			w.Header().Set("Access-Control-Allow-Methods", "GET, PUT, OPTIONS")
 			w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
