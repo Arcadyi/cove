@@ -311,7 +311,10 @@ jobs:
           Compress-Archive -Path staging/* -DestinationPath cove-windows-amd64.zip
 
       - name: Install NSIS
-        run: choco install nsis --no-progress -y
+        shell: pwsh
+        run: |
+          choco install nsis --no-progress -y
+          echo "C:\Program Files (x86)\NSIS" | Out-File $env:GITHUB_PATH -Encoding utf8 -Append
 
       - name: Create NSIS installer
         shell: pwsh
