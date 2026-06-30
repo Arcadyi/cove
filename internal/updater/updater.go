@@ -2,6 +2,7 @@ package updater
 
 import (
 	"archive/tar"
+	"archive/zip"
 	"compress/gzip"
 	"encoding/json"
 	"fmt"
@@ -27,14 +28,12 @@ const RestartExitCode = 42
 // assetName is the filename this build looks for in GitHub release assets.
 // The CI packaging job MUST emit an asset with exactly this name or check()
 // silently returns available=false. Both sides are pinned here as the source
-// of truth — keep in sync with the "Package" job in release.yml.
+// of truth — keep in sync with the "Package" jobs in release.yml.
 func assetName() string {
 	var ext string
 	switch runtime.GOOS {
 	case "windows":
 		ext = ".zip"
-	case "linux":
-		ext = ".AppImage"
 	default:
 		ext = ".tar.gz"
 	}
@@ -109,7 +108,7 @@ func isCleanSemver(v string) bool {
 }
 
 func fetchLatest() (*ghRelease, error) {
-	url := "https://api.github.com/repos/Arcadyi/cove/releases/latest"
+	url := "https://api.github.com/repos/coveninja/cove/releases/latest"
 	req, _ := http.NewRequest(http.MethodGet, url, nil)
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
@@ -201,18 +200,92 @@ func applyUpdate() error {
 	}
 
 	log.Printf("[updater] extracting to %s", destDir)
-	if err := extractTarGz(resp.Body, destDir); err != nil {
-		return fmt.Errorf("extract: %w", err)
+	if runtime.GOOS == "windows" {
+		// archive/zip requires io.ReaderAt, so download to a temp file first.
+		tmp, err := os.CreateTemp("", "cove-update-*.zip")
+		if err != nil {
+			return fmt.Errorf("temp file: %w", err)
+		}
+		tmpName := tmp.Name()
+		defer os.Remove(tmpName)
+		if _, err := io.Copy(tmp, resp.Body); err != nil {
+			tmp.Close()
+			return fmt.Errorf("download: %w", err)
+		}
+		tmp.Close()
+		if err := extractZip(tmpName, destDir, filepath.Base(execPath)); err != nil {
+			return fmt.Errorf("extract: %w", err)
+		}
+	} else {
+		if err := extractTarGz(resp.Body, destDir); err != nil {
+			return fmt.Errorf("extract: %w", err)
+		}
 	}
 
 	log.Println("[updater] done — restarting")
 	// Delay exit slightly so the HTTP response is flushed to the client before
-	// the process disappears. The Qt shell will detect RestartExitCode and
-	// re-exec itself with the same arguments.
+	// the process disappears. The Qt shell detects RestartExitCode and re-execs
+	// itself; on Windows it also renames cove.exe.new → cove.exe first.
 	go func() {
 		time.Sleep(250 * time.Millisecond)
 		os.Exit(RestartExitCode)
 	}()
+	return nil
+}
+
+// extractZip extracts a .zip archive into destDir. selfName is the base name
+// of the currently-running binary; on Windows a running .exe cannot be renamed
+// over itself, so it is written as selfName+".new" and the Qt shell performs
+// the final rename after exit code 42 causes it to restart.
+func extractZip(zipPath, destDir, selfName string) error {
+	r, err := zip.OpenReader(zipPath)
+	if err != nil {
+		return err
+	}
+	defer r.Close()
+
+	for _, f := range r.File {
+		if strings.Contains(filepath.ToSlash(f.Name), "..") {
+			log.Printf("[updater] skipping suspicious path: %s", f.Name)
+			continue
+		}
+
+		target := filepath.Join(destDir, filepath.FromSlash(f.Name))
+
+		if f.FileInfo().IsDir() {
+			if err := os.MkdirAll(target, 0o755); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			return err
+		}
+
+		// The running binary cannot be replaced in-place on Windows; write a
+		// .new sidecar so the Qt shell can rename it after we exit with 42.
+		dest := target
+		if filepath.Base(target) == selfName {
+			dest = target + ".new"
+		}
+
+		rc, err := f.Open()
+		if err != nil {
+			return err
+		}
+		out, err := os.OpenFile(dest, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o755)
+		if err != nil {
+			rc.Close()
+			return err
+		}
+		_, copyErr := io.Copy(out, rc)
+		rc.Close()
+		out.Close()
+		if copyErr != nil {
+			os.Remove(dest)
+			return copyErr
+		}
+	}
 	return nil
 }
 

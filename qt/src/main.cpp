@@ -260,15 +260,19 @@ int main(int argc, char *argv[]) {
   QtWebEngineQuick::initialize();
   QGuiApplication app(argc, argv);
   app.setApplicationName("cove");
-  app.setOrganizationName("arcadyi");
+  app.setOrganizationName("coveninja");
 
   qmlRegisterType<MpvObject>("mpv", 1, 0, "MpvObject");
 
   QCommandLineParser parser;
-  parser.setApplicationDescription("Cove Qt shell (Phase 2a)");
+  parser.setApplicationDescription("Cove Qt shell");
   parser.addHelpOption();
   QCommandLineOption backendOpt("backend", "Path to the Go sidecar binary.",
+#ifdef Q_OS_WIN
+                                "path", "../../cove.exe");
+#else
                                 "path", "../../cove");
+#endif
   QCommandLineOption webrootOpt("webroot", "Path to the renderer build dir.",
                                 "path", "../../web/dist");
   QCommandLineOption apiPortOpt("api-port", "Backend API port.", "port", "6969");
@@ -332,13 +336,22 @@ int main(int argc, char *argv[]) {
     // Exit code 42 signals that the backend applied an update and wants the
     // shell to restart so the new binaries are loaded. Re-exec this process
     // with the same arguments, then quit the current instance.
-    // arguments().mid(1) strips argv[0] (the program path), which
-    // startDetached takes as its first argument separately.
+    // On Windows the backend cannot rename its own .exe while running, so it
+    // writes cove.exe.new and exits; we perform the rename here, when the
+    // process is guaranteed to be gone.
     QObject::connect(
         backend,
         QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
-        [&app](int exitCode, QProcess::ExitStatus) {
+        [&app, backendPath](int exitCode, QProcess::ExitStatus) {
           if (exitCode == 42) {
+#ifdef Q_OS_WIN
+            const QString newExe = backendPath + ".new";
+            if (QFile::exists(newExe)) {
+              QFile::remove(backendPath + ".old");
+              QFile::rename(backendPath, backendPath + ".old");
+              QFile::rename(newExe, backendPath);
+            }
+#endif
             const QStringList args = QCoreApplication::arguments().mid(1);
             QProcess::startDetached(QCoreApplication::applicationFilePath(),
                                     args);

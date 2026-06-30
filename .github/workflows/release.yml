@@ -189,3 +189,104 @@ jobs:
             cove-linux-amd64.flatpak
             cove-linux-amd64.tar.gz
             PKGBUILD
+
+  package-windows:
+    name: Package release asset (Windows)
+    needs: [go, web]
+    runs-on: windows-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.9.*'
+          host: windows
+          arch: win64_mingw
+          modules: qtwebengine qtwebchannel
+
+      - name: Download mpv-dev SDK (shinchiro)
+        shell: bash
+        run: |
+          ASSET_URL=$(curl -s https://api.github.com/repos/shinchiro/mpv-winbuild-cmake/releases/latest \
+            | jq -r '.assets[] | select(.name | test("mpv-dev-x86_64.*\\.7z$")) | .browser_download_url' \
+            | head -1)
+          echo "Downloading $ASSET_URL"
+          curl -L "$ASSET_URL" -o mpv-dev.7z
+          7z x mpv-dev.7z -ompv-sdk -y
+
+      - name: Build Go backend (Windows)
+        env:
+          CGO_ENABLED: '0'
+          GOOS: windows
+          GOARCH: amd64
+        run: go build -ldflags "-X main.Version=${{ github.ref_name }} -X main.TmdbApiKey=${{ secrets.TMDB_API_KEY }} -X main.SupabaseURL=${{ secrets.SUPABASE_URL }} -X main.SupabaseAnonKey=${{ secrets.SUPABASE_PUBLISHABLE_KEY }} -X main.SupabaseServiceKey=${{ secrets.SUPABASE_SERVICE_KEY }} -X main.SupabaseJWTSecret=${{ secrets.SUPABASE_JWT_SECRET }}" -o cove.exe .
+
+      - name: Install web deps
+        working-directory: web
+        run: npm ci
+
+      - name: Build web frontend
+        working-directory: web
+        env:
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_PUBLISHABLE_KEY: ${{ secrets.VITE_SUPABASE_PUBLISHABLE_KEY }}
+        run: npm run build
+
+      - name: Build Qt shell (Windows)
+        shell: bash
+        env:
+          MPV_SDK: ${{ github.workspace }}/mpv-sdk
+        run: |
+          cmake -S qt -B qt/build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build qt/build
+
+      - name: Bundle Qt DLLs (windeployqt)
+        shell: bash
+        run: |
+          windeployqt --qmldir qt/qml qt/build/cove_shell.exe
+          # Copy mpv DLL into the Qt build dir so windeployqt's output is self-contained
+          cp mpv-sdk/mpv-2.dll qt/build/
+
+      - name: Assemble staging directory
+        shell: bash
+        run: |
+          mkdir -p staging/web
+          cp cove.exe         staging/
+          cp qt/build/cove_shell.exe staging/
+          # Copy all DLLs and Qt plugin subdirs from the windeployqt output
+          cp qt/build/*.dll   staging/ 2>/dev/null || true
+          for d in platforms imageformats iconengines styles tls translations resources; do
+            [ -d "qt/build/$d" ] && cp -r "qt/build/$d" staging/ || true
+          done
+          cp -r web/dist/     staging/web/
+
+      - name: Create zip (for auto-updater)
+        shell: bash
+        run: |
+          cd staging
+          7z a ../cove-windows-amd64.zip .
+          cd ..
+
+      - name: Create NSIS installer
+        shell: bash
+        run: |
+          PKG_VER="${{ github.ref_name }}"
+          makensis -DVERSION="$PKG_VER" packaging/windows/cove.nsi
+
+      - name: Upload release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            cove-windows-amd64-setup.exe
+            cove-windows-amd64.zip

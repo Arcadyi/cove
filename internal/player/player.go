@@ -36,7 +36,7 @@ type Player struct {
 // torrentDataDir is where the anacrolix client writes downloaded pieces. The
 // reaper removes per-torrent subdirectories under here when a torrent is
 // dropped, so New() and CleanupTorrents must agree on the path.
-const torrentDataDir = "/tmp/cove-torrents"
+var torrentDataDir = filepath.Join(os.TempDir(), "cove-torrents")
 
 type torrentState struct {
 	torrent      *torrent.Torrent

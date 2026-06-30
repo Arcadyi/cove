@@ -14,16 +14,35 @@ find_package(Qt6 REQUIRED COMPONENTS
   Core Gui Qml Quick WebEngineQuick WebEngineCore WebChannel OpenGL
 )
 
-# libmpv via pkg-config (Arch ships headers + mpv.pc in the `mpv` package).
-find_package(PkgConfig REQUIRED)
-pkg_check_modules(MPV REQUIRED IMPORTED_TARGET mpv)
+# libmpv — pkg-config on Linux/macOS; manual SDK path on Windows.
+# On Windows, set the MPV_SDK environment variable to the extracted
+# shinchiro mpv-dev directory (the one containing include/ and libmpv.dll.a).
+if(WIN32)
+    find_path(MPV_INCLUDE_DIR mpv/client.h
+        HINTS "$ENV{MPV_SDK}/include" "$ENV{MPV_SDK}"
+        REQUIRED)
+    find_library(MPV_LIBRARY NAMES mpv libmpv
+        HINTS "$ENV{MPV_SDK}" "$ENV{MPV_SDK}/lib"
+        REQUIRED)
+    set(MPV_LINK_TARGET "${MPV_LIBRARY}")
+    set(MPV_INCLUDE_TARGET "${MPV_INCLUDE_DIR}")
+else()
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(MPV REQUIRED IMPORTED_TARGET mpv)
+    set(MPV_LINK_TARGET PkgConfig::MPV)
+endif()
 
-add_executable(cove_shell
+# WIN32 suppresses the console window on Windows; no effect on other platforms.
+add_executable(cove_shell WIN32
   src/main.cpp
   src/MpvObject.cpp
   src/MpvObject.h
   resources.qrc
 )
+
+if(WIN32)
+    target_include_directories(cove_shell PRIVATE "${MPV_INCLUDE_TARGET}")
+endif()
 
 target_link_libraries(cove_shell PRIVATE
   Qt6::Core
@@ -34,5 +53,5 @@ target_link_libraries(cove_shell PRIVATE
   Qt6::WebEngineCore
   Qt6::WebChannel
   Qt6::OpenGL
-  PkgConfig::MPV
+  ${MPV_LINK_TARGET}
 )

@@ -40,6 +40,9 @@ var SupabaseJWTSecret = ""
 func main() {
 	// Load .env if present — for local development only.
 	if ex, err := os.Executable(); err == nil {
+		// Clean up stale .new / .old sidecars left by a previous self-update.
+		os.Remove(ex + ".new")
+		os.Remove(ex + ".old")
 		if err := godotenv.Load(filepath.Join(filepath.Dir(ex), ".env")); err != nil {
 			log.Println("no .env next to binary; relying on the environment:", err)
 		}
