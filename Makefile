@@ -83,6 +83,12 @@ patch:
 	echo "" && \
 	echo "  Tagged v$$NEW_VER — push with: git push origin master v$$NEW_VER"
 
+## Pull private submodules and inject implementation files into internal/.
+inject-private:
+	git submodule update --init
+	cp _private/cove-auth/*.go internal/supabase/
+	cp _private/cove-discover/*.go internal/discover/
+
 ## Remove build artifacts.
 clean:
 	rm -f $(GO_BIN)

@@ -1,0 +1,6 @@
+[submodule "_private/cove-auth"]
+	path = _private/cove-auth
+	url = git@github.com:coveninja/cove-auth.git
+[submodule "_private/cove-discover"]
+	path = _private/cove-discover
+	url = git@github.com:coveninja/cove-discover.git
