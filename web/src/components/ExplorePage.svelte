@@ -157,7 +157,6 @@
         medias={featuredRow.medias}
         loading={featuredRow.loading}
         onSelect={onSelectMedia}
-        onWatch={onWatch}
       />
 
       <!-- Genre rows via SmallRecommendations; skip the one currently featured above -->

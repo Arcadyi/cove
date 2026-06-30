@@ -24,13 +24,11 @@
     medias = [],
     loading = false,
     onSelect = () => {},
-    onWatch,
   }: {
     header?: string | null;
     medias?: Media[];
     loading?: boolean;
     onSelect?: (media: Media) => void;
-    onWatch?: (media: Media, season?: number, episode?: number) => void;
   } = $props();
 
   let trackEl = $state<HTMLElement | null>(null);
