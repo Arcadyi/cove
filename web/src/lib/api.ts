@@ -8,6 +8,7 @@ import type {
 import type { AddonEntry, Stream, TimestampData, WatchOption } from "$lib/types/addons";
 import type { Settings } from "$lib/types/settings"; // tygo-generated
 import type { LibraryEntry, WatchProgress } from "$lib/types/library"; // tygo-generated
+import type { Profile } from "$lib/types/auth";
 
 // Single source of truth for the backend origin. Override per-environment with
 // VITE_API_BASE (e.g. in .env.production); falls back to the local dev server.
@@ -17,6 +18,15 @@ import type { LibraryEntry, WatchProgress } from "$lib/types/library"; // tygo-g
 const BASE =
   (import.meta as unknown as { env?: Record<string, string | undefined> }).env
     ?.VITE_API_BASE ?? "http://localhost:6969/api";
+
+// Auth token getter — set by setTokenSource() on startup; called on every request
+// so it always reads the current value without a $effect timing gap.
+let _getToken: (() => string | null) | null = null;
+
+/** Wire up the auth token source. Called once in App.svelte on mount. */
+export function setTokenSource(getter: () => string | null): void {
+  _getToken = getter;
+}
 
 // ── Request helpers ───────────────────────────────────────────────────────────
 
@@ -103,10 +113,18 @@ export class ApiError extends Error {
   }
 }
 
+function withAuth(init?: RequestInit): RequestInit {
+  const token = _getToken?.() ?? null;
+  if (!token) return init ?? {};
+  const headers = new Headers(init?.headers);
+  headers.set("Authorization", `Bearer ${token}`);
+  return { ...init, headers };
+}
+
 /** fetch + ok-check + JSON parse. Throws ApiError on non-2xx. */
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const exec = async (): Promise<T> => {
-    const res = await limitedFetch(`${BASE}${path}`, init);
+    const res = await limitedFetch(`${BASE}${path}`, withAuth(init));
     if (!res.ok) {
       throw new ApiError(res.status, await res.text().catch(() => ""), path);
     }
@@ -127,7 +145,7 @@ async function requestOrNull<T>(
   init?: RequestInit,
 ): Promise<T | null> {
   const exec = async (): Promise<T | null> => {
-    const res = await limitedFetch(`${BASE}${path}`, init);
+    const res = await limitedFetch(`${BASE}${path}`, withAuth(init));
     if (res.status === 404) return null;
     if (!res.ok) {
       throw new ApiError(res.status, await res.text().catch(() => ""), path);
@@ -629,4 +647,93 @@ export const api = {
       );
     }
   },
+
+  // ── Profiles ──────────────────────────────────────────────────────────────────
+  profilesList: (): Promise<{ profiles: Profile[]; active_profile_id: string }> =>
+    request(`/profiles`),
+
+  profileCreate: (name: string): Promise<Profile> =>
+    request(`/profiles`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name }),
+    }),
+
+  profileRename: (id: string, name: string): Promise<{ id: string; name: string }> =>
+    request(`/profiles/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name }),
+    }),
+
+  profileDelete: (id: string): Promise<void> =>
+    request(`/profiles/${id}`, { method: "DELETE" }),
+
+  profileActivate: (id: string): Promise<Profile> =>
+    request(`/profiles/${id}/activate`, { method: "POST" }),
+
+  // ── Auth ─────────────────────────────────────────────────────────────────────
+
+  // Returns a full session when email confirmation is disabled in Supabase, or
+  // { confirmation_required: true } when Supabase sent a confirmation email.
+  authRegister: (
+    email: string,
+    password: string,
+    profile_name?: string,
+  ): Promise<{ access_token: string; profile: Profile } | { confirmation_required: true }> =>
+    request(`/auth/register`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email, password, profile_name }),
+    }),
+
+  // Submits the 6-digit OTP from the signup confirmation email.
+  // Returns a full session on success.
+  authConfirmRegister: (
+    email: string,
+    token: string,
+    password: string,
+    profile_name?: string,
+  ): Promise<{ access_token: string; refresh_token: string; profile: Profile }> =>
+    request(`/auth/register/confirm`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email, token, password, profile_name }),
+    }),
+
+  authLogin: (
+    email: string,
+    password: string,
+  ): Promise<{ access_token: string; refresh_token: string; profiles: Profile[]; active: Profile }> =>
+    request(`/auth/login`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email, password }),
+    }),
+
+  authSendOTP: (email: string): Promise<{ status: string }> =>
+    request(`/auth/otp`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email }),
+    }),
+
+  authVerifyOTP: (
+    email: string,
+    token: string,
+  ): Promise<{ access_token: string; refresh_token: string; profiles: Profile[]; active: Profile }> =>
+    request(`/auth/verify-otp`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email, token }),
+    }),
+
+  authLogout: (): Promise<{ status: string }> =>
+    request(`/auth/logout`, { method: "POST" }),
+
+  authMe: (): Promise<{ profile: Profile; linked: boolean }> =>
+    request(`/auth/me`),
+
+  authSync: (): Promise<{ status: string }> =>
+    request(`/auth/sync`, { method: "POST" }),
 };

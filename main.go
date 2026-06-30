@@ -12,7 +12,9 @@ import (
 	"github.com/Arcadyi/cove/internal/discover"
 	"github.com/Arcadyi/cove/internal/library"
 	"github.com/Arcadyi/cove/internal/player"
+	"github.com/Arcadyi/cove/internal/profiles"
 	"github.com/Arcadyi/cove/internal/settings"
+	supapkg "github.com/Arcadyi/cove/internal/supabase"
 	"github.com/Arcadyi/cove/internal/tmdb"
 	"github.com/Arcadyi/cove/internal/updater"
 	"github.com/Arcadyi/cove/internal/utils"
@@ -48,13 +50,35 @@ func main() {
 		log.Println("warning: TMDB_API_KEY is not set — TMDB metadata requests will fail")
 	}
 
-	addonMgr := addons.New()
+	// Profiles must be initialised first — all other packages are profile-scoped.
+	var addonMgr *addons.Manager
+	var st *settings.Store
+	var lib *library.Library
 
-	st, err := settings.New()
+	profileStore, err := profiles.New(func(profileID string) {
+		// Reload all data stores when the active profile switches.
+		if err := lib.SetProfile(profileID); err != nil {
+			log.Println("profile switch: reload library:", err)
+		}
+		if err := st.SetProfile(profileID); err != nil {
+			log.Println("profile switch: reload settings:", err)
+		}
+		if err := addonMgr.SetProfile(profileID); err != nil {
+			log.Println("profile switch: reload addons:", err)
+		}
+	})
+	if err != nil {
+		log.Fatal("could not init profiles:", err)
+	}
+	activeID := profileStore.ActiveProfileID()
+
+	addonMgr = addons.New(activeID)
+
+	st, err = settings.New(activeID)
 	if err != nil {
 		log.Println("could not load settings:", err)
 	}
-	lib, err := library.New()
+	lib, err = library.New(activeID)
 	if err != nil {
 		log.Println("could not load library:", err)
 	}
@@ -79,7 +103,13 @@ func main() {
 	p.SetupHandlers()
 	st.SetupHandlers()
 	lib.SetupHandlers()
+	profileStore.SetupHandlers()
 	updater.SetupHandlers(Version)
+
+	// Supabase auth + sync (no-op if SUPABASE_URL is not set).
+	supaCfg := supapkg.ConfigFromEnv()
+	supaServer := supapkg.NewServer(supaCfg, profileStore, lib, st, addonMgr)
+	supaServer.SetupHandlers()
 
 	disc := discover.New(tmdbClient, lib)
 	disc.SetupHandlers()

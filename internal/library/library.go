@@ -32,9 +32,9 @@ const (
 
 // LibraryEntry mirrors the `library_entries` Supabase table.
 type LibraryEntry struct {
-	ID          string   `json:"id"`      // UUIDv4
-	UserID      *string  `json:"user_id"` // null until Supabase auth is wired up
-	TmdbID      int      `json:"tmdb_id"`
+	ID        string  `json:"id"`         // UUIDv4
+	ProfileID *string `json:"profile_id"` // null until profile is wired up
+	TmdbID    int     `json:"tmdb_id"`
 	MediaType   string   `json:"media_type"` // "movie" | "tv"
 	Title       string   `json:"title"`
 	PosterPath  string   `json:"poster_path"`
@@ -55,9 +55,9 @@ type LibraryEntry struct {
 // WatchProgress mirrors the `watch_progress` Supabase table.
 // One row per unique (tmdb_id, media_type, season, episode) tuple.
 type WatchProgress struct {
-	ID              string    `json:"id"`
-	UserID          *string   `json:"user_id"`
-	LibraryEntryID  string    `json:"library_entry_id"`
+	ID             string  `json:"id"`
+	ProfileID      *string `json:"profile_id"`
+	LibraryEntryID string  `json:"library_entry_id"`
 	TmdbID          int       `json:"tmdb_id"`
 	MediaType       string    `json:"media_type"`
 	Season          *int      `json:"season"`  // null for movies
@@ -97,6 +97,78 @@ type TasteSignal struct {
 // TasteSignals returns one signal per title the user has any history with —
 // every library entry, plus titles with completed watch history even if the
 // entry was later removed. Safe to call concurrently.
+// AllEntries returns a snapshot of all library entries. Used for sync.
+func (l *Library) AllEntries() []*LibraryEntry {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	out := make([]*LibraryEntry, 0, len(l.db.Entries))
+	for _, e := range l.db.Entries {
+		cp := *e
+		out = append(out, &cp)
+	}
+	return out
+}
+
+// AllProgress returns a snapshot of all watch progress records. Used for sync.
+func (l *Library) AllProgress() []*WatchProgress {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	out := make([]*WatchProgress, 0, len(l.db.Progress))
+	for _, p := range l.db.Progress {
+		cp := *p
+		out = append(out, &cp)
+	}
+	return out
+}
+
+// AllDismissals returns a snapshot of all dismissal records. Used for sync.
+func (l *Library) AllDismissals() []*Dismissal {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	out := make([]*Dismissal, 0, len(l.db.Dismissed))
+	for _, d := range l.db.Dismissed {
+		cp := *d
+		out = append(out, &cp)
+	}
+	return out
+}
+
+// MergeFrom merges remote data (pulled from Supabase) into the local store.
+// Remote entries replace local ones for the same (tmdb_id, media_type) key.
+// Watch progress takes the max position_seconds. Dismissals are unioned.
+func (l *Library) MergeFrom(entries []*LibraryEntry, progress []*WatchProgress, dismissals []*Dismissal) {
+	l.mu.Lock()
+	for _, e := range entries {
+		key := entryKey(e.TmdbID, e.MediaType)
+		if local, ok := l.db.Entries[key]; ok {
+			if e.UpdatedAt.After(local.UpdatedAt) {
+				l.db.Entries[key] = e
+			}
+		} else {
+			l.db.Entries[key] = e
+		}
+	}
+	for _, p := range progress {
+		key := progressKey(p.TmdbID, p.MediaType, p.Season, p.Episode)
+		if local, ok := l.db.Progress[key]; ok {
+			if p.PositionSeconds > local.PositionSeconds {
+				l.db.Progress[key] = p
+			}
+		} else {
+			l.db.Progress[key] = p
+		}
+	}
+	for _, d := range dismissals {
+		key := entryKey(d.TmdbID, d.MediaType)
+		if _, ok := l.db.Dismissed[key]; !ok {
+			l.db.Dismissed[key] = d
+		}
+	}
+	l.mu.Unlock()
+	_ = l.persist()
+	l.gen.Add(1)
+}
+
 func (l *Library) TasteSignals() []TasteSignal {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
@@ -222,12 +294,12 @@ type Library struct {
 
 // ── New ────────────────────────────────────────────────────────────────────────
 
-// New loads library.json from the per-user config directory (see
+// New loads library-{profileID}.json from the per-user config directory (see
 // utils.ConfigPath), creating it with empty maps if it doesn't exist yet. It
 // always returns a usable (non-nil) *Library even on error, so the caller can
 // still register handlers against an empty store rather than crashing —
 // matching the old Init's best-effort behaviour.
-func New() (*Library, error) {
+func New(profileID string) (*Library, error) {
 	l := &Library{
 		db: diskStore{
 			Entries:   make(map[string]*LibraryEntry),
@@ -236,7 +308,7 @@ func New() (*Library, error) {
 		},
 	}
 
-	path, err := utils.ConfigPath("library.json")
+	path, err := utils.ConfigPath(fmt.Sprintf("library-%s.json", profileID))
 	if err != nil {
 		return l, err
 	}
@@ -269,6 +341,35 @@ func (l *Library) persist() error {
 }
 
 func (l *Library) Generation() uint64 { return l.gen.Load() }
+
+// SetProfile reloads the library from the given profile's data file.
+// Safe to call while handlers are live — takes the write lock while swapping.
+func (l *Library) SetProfile(profileID string) error {
+	path, err := utils.ConfigPath(fmt.Sprintf("library-%s.json", profileID))
+	if err != nil {
+		return err
+	}
+	newDB := diskStore{
+		Entries:   make(map[string]*LibraryEntry),
+		Progress:  make(map[string]*WatchProgress),
+		Dismissed: make(map[string]*Dismissal),
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	if err == nil {
+		if err := json.Unmarshal(raw, &newDB); err != nil {
+			return err
+		}
+	}
+	l.mu.Lock()
+	l.db = newDB
+	l.path = path
+	l.mu.Unlock()
+	l.gen.Add(1)
+	return nil
+}
 
 // ── Key helpers ───────────────────────────────────────────────────────────────
 

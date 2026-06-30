@@ -17,6 +17,7 @@
   import type { Page } from "$lib/types/types";
   import * as Tooltip from "$lib/components/ui/tooltip/index.js";
   import { Player } from "$lib/player/player.svelte";
+  import AccountPopover from "./AccountPopover.svelte";
 
   let {
     query = $bindable(""),
@@ -358,6 +359,7 @@
           <p>Settings</p>
         </Tooltip.Content>
       </Tooltip.Root>
+      <AccountPopover />
     {/if}
   </div>
 </div>

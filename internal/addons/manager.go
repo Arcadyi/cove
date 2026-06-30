@@ -50,14 +50,14 @@ var officialAddons = []AddonEntry{
 	},
 }
 
-// New returns a Manager loaded from disk (or empty on first run).
-func New() *Manager {
+// New returns a Manager loaded from the profile-scoped store (or empty on first run).
+func New(profileID string) *Manager {
 	m := &Manager{
 		client:          &http.Client{Timeout: 30 * time.Second},
 		officialEnabled: make(map[string]bool),
 	}
 
-	path, err := utils.ConfigPath("addons.json")
+	path, err := utils.ConfigPath(fmt.Sprintf("addons-%s.json", profileID))
 	if err != nil {
 		log.Println("addons: could not determine config path:", err)
 		return m
@@ -74,6 +74,28 @@ func New() *Manager {
 		m.officialEnabled = store.OfficialEnabled
 	}
 	return m
+}
+
+// SetProfile reloads addon configuration from the given profile's data file.
+func (m *Manager) SetProfile(profileID string) error {
+	path, err := utils.ConfigPath(fmt.Sprintf("addons-%s.json", profileID))
+	if err != nil {
+		return err
+	}
+	store, err := loadStore(path)
+	if err != nil {
+		return err
+	}
+	m.mu.Lock()
+	m.storePath = path
+	m.stremioAddons = store.StremioAddons
+	if store.OfficialEnabled != nil {
+		m.officialEnabled = store.OfficialEnabled
+	} else {
+		m.officialEnabled = make(map[string]bool)
+	}
+	m.mu.Unlock()
+	return nil
 }
 
 // GetEntries returns all addons (official + stremio) with current enabled state.

@@ -2,6 +2,7 @@ package settings
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -84,14 +85,14 @@ type Store struct {
 	path   string
 }
 
-// New resolves settings.json in the per-user config directory (see
+// New resolves settings-{profileID}.json in the per-user config directory (see
 // utils.ConfigPath) and loads it, or writes the defaults on first run. It always
 // returns a usable (non-nil) *Store even on error, so the caller can register
 // handlers against in-memory defaults rather than crashing.
-func New() (*Store, error) {
+func New(profileID string) (*Store, error) {
 	s := &Store{cached: defaultSettings}
 
-	path, err := utils.ConfigPath("settings.json")
+	path, err := utils.ConfigPath(fmt.Sprintf("settings-%s.json", profileID))
 	if err != nil {
 		return s, err
 	}
@@ -120,6 +121,47 @@ func (s *Store) write() error {
 		return err
 	}
 	return utils.AtomicWriteFile(s.path, data, 0o644)
+}
+
+// Get returns the current settings value. Safe for concurrent use.
+func (s *Store) Get() Settings {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.cached
+}
+
+// MergeFrom replaces the cached settings with incoming (from a Supabase pull).
+func (s *Store) MergeFrom(incoming Settings) {
+	s.mu.Lock()
+	s.cached = incoming
+	err := s.write()
+	s.mu.Unlock()
+	if err != nil {
+		log.Println("settings: merge write:", err)
+	}
+}
+
+// SetProfile reloads settings from the given profile's data file.
+func (s *Store) SetProfile(profileID string) error {
+	path, err := utils.ConfigPath(fmt.Sprintf("settings-%s.json", profileID))
+	if err != nil {
+		return err
+	}
+	cur := defaultSettings
+	data, err := os.ReadFile(path)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	if err == nil {
+		if err := json.Unmarshal(data, &cur); err != nil {
+			return err
+		}
+	}
+	s.mu.Lock()
+	s.cached = cur
+	s.path = path
+	s.mu.Unlock()
+	return nil
 }
 
 // SetupHandlers registers GET/PUT /api/settings.

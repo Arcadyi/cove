@@ -1,4 +1,5 @@
 /.env
+/web/.env
 /electron/build/
 /cove
 /cove.exe

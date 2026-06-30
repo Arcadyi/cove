@@ -13,7 +13,7 @@ export const StatusDropped: Status = "dropped";
  */
 export interface LibraryEntry {
   id: string; // UUIDv4
-  user_id?: string; // null until Supabase auth is wired up
+  profile_id?: string; // null until profile is wired up
   tmdb_id: number /* int */;
   media_type: string; // "movie" | "tv"
   title: string;
@@ -39,7 +39,7 @@ export interface LibraryEntry {
  */
 export interface WatchProgress {
   id: string;
-  user_id?: string;
+  profile_id?: string;
   library_entry_id: string;
   tmdb_id: number /* int */;
   media_type: string;
