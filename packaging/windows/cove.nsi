@@ -1,10 +1,14 @@
 Unicode True
 !include "MUI2.nsh"
 
-; Passed in from CI: makensis -DVERSION=v0.14.5 cove.nsi
-; Falls back to "dev" for local testing.
+; Passed in from CI: makensis /DVERSION=v0.14.5 /DOUTDIR=C:\...\workspace cove.nsi
+; Falls back to sensible defaults for local testing.
 !ifndef VERSION
   !define VERSION "dev"
+!endif
+; OUTDIR lets CI write the installer to the repo root instead of the script dir.
+!ifndef OUTDIR
+  !define OUTDIR "."
 !endif
 
 !define APP_NAME    "Cove"
@@ -12,7 +16,7 @@ Unicode True
 !define REG_UNINST  "Software\Microsoft\Windows\CurrentVersion\Uninstall\Cove"
 
 Name      "${APP_NAME}"
-OutFile   "cove-windows-amd64-setup.exe"
+OutFile   "${OUTDIR}\cove-windows-amd64-setup.exe"
 InstallDir "$PROGRAMFILES64\Cove"
 InstallDirRegKey HKCU "Software\Cove" "InstallDir"
 RequestExecutionLevel admin

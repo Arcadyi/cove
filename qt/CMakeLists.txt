@@ -15,8 +15,8 @@ find_package(Qt6 REQUIRED COMPONENTS
 )
 
 # libmpv — pkg-config on Linux/macOS; manual SDK path on Windows.
-# On Windows, set the MPV_SDK environment variable to the extracted
-# shinchiro mpv-dev directory (the one containing include/ and libmpv.dll.a).
+# On Windows, MPV_SDK must point to the extracted shinchiro mpv-dev directory
+# (CI generates mpv.lib from the DLL via dumpbin+lib.exe before this runs).
 if(WIN32)
     find_path(MPV_INCLUDE_DIR mpv/client.h
         HINTS "$ENV{MPV_SDK}/include" "$ENV{MPV_SDK}"

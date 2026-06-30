@@ -208,11 +208,17 @@ jobs:
           cache: npm
           cache-dependency-path: web/package-lock.json
 
+      # Set up MSVC toolchain — required for Qt WebEngine and to run dumpbin/lib
+      # to generate an MSVC-compatible mpv.lib from the shinchiro DLL.
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
       - uses: jurplel/install-qt-action@v4
         with:
           version: '6.9.*'
           host: windows
-          arch: win64_mingw
+          arch: win64_msvc2022_64
           modules: qtwebengine qtwebchannel
 
       - name: Download mpv-dev SDK (shinchiro)
@@ -224,6 +230,27 @@ jobs:
           echo "Downloading $ASSET_URL"
           curl -L "$ASSET_URL" -o mpv-dev.7z
           7z x mpv-dev.7z -ompv-sdk -y
+
+      # The shinchiro dev package ships libmpv.dll.a (MinGW format), which MSVC
+      # can't link against. Locate the DLL (handles flat and nested archives),
+      # generate a proper mpv.lib from its exports, and export MPV_SDK for CMake.
+      - name: Generate MSVC import library for mpv
+        shell: pwsh
+        run: |
+          $dll = Get-ChildItem mpv-sdk -Filter "mpv-2.dll" -Recurse | Select-Object -First 1
+          if (-not $dll) { $dll = Get-ChildItem mpv-sdk -Filter "libmpv-2.dll" -Recurse | Select-Object -First 1 }
+          $dir = $dll.DirectoryName
+          Write-Host "mpv root: $dir"
+          # Export for subsequent CMake and staging steps
+          "MPV_SDK=$dir"     | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
+          "MPV_DLL=$($dll.FullName)" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
+          Write-Host "Generating mpv.lib from $($dll.FullName)"
+          $lines = dumpbin /exports $dll.FullName
+          $funcs = $lines | Where-Object { $_ -match '^\s+\d+\s+[0-9A-F]+\s+[0-9A-F]+\s+(\w+)' } |
+                   ForEach-Object { [regex]::Match($_, '^\s+\d+\s+[0-9A-F]+\s+[0-9A-F]+\s+(\w+)').Groups[1].Value }
+          Set-Content "$dir\mpv.def" -Value (@("EXPORTS") + $funcs) -Encoding ASCII
+          lib /def:"$dir\mpv.def" /machine:x64 /out:"$dir\mpv.lib"
+          Write-Host "Done: $dir\mpv.lib"
 
       - name: Build Go backend (Windows)
         env:
@@ -243,46 +270,41 @@ jobs:
           VITE_SUPABASE_PUBLISHABLE_KEY: ${{ secrets.VITE_SUPABASE_PUBLISHABLE_KEY }}
         run: npm run build
 
-      - name: Build Qt shell (Windows)
-        shell: bash
-        env:
-          MPV_SDK: ${{ github.workspace }}/mpv-sdk
+      - name: Build Qt shell (Windows/MSVC)
+        shell: cmd
         run: |
           cmake -S qt -B qt/build -G Ninja -DCMAKE_BUILD_TYPE=Release
           cmake --build qt/build
 
       - name: Bundle Qt DLLs (windeployqt)
-        shell: bash
+        shell: pwsh
         run: |
           windeployqt --qmldir qt/qml qt/build/cove_shell.exe
-          # Copy mpv DLL into the Qt build dir so windeployqt's output is self-contained
-          cp mpv-sdk/mpv-2.dll qt/build/
+          # MPV_DLL was set by the Generate MSVC import library step
+          Copy-Item "${{ env.MPV_DLL }}" qt/build/mpv-2.dll
 
       - name: Assemble staging directory
-        shell: bash
+        shell: pwsh
         run: |
-          mkdir -p staging/web
-          cp cove.exe         staging/
-          cp qt/build/cove_shell.exe staging/
-          # Copy all DLLs and Qt plugin subdirs from the windeployqt output
-          cp qt/build/*.dll   staging/ 2>/dev/null || true
-          for d in platforms imageformats iconengines styles tls translations resources; do
-            [ -d "qt/build/$d" ] && cp -r "qt/build/$d" staging/ || true
-          done
-          cp -r web/dist/     staging/web/
+          New-Item -ItemType Directory -Force staging/web | Out-Null
+          Copy-Item cove.exe staging/
+          Copy-Item qt/build/cove_shell.exe staging/
+          # DLLs and Qt plugin subdirs placed by windeployqt
+          Get-ChildItem qt/build -Filter "*.dll" | Copy-Item -Destination staging/
+          foreach ($d in @("platforms","imageformats","iconengines","styles","tls","translations","resources")) {
+            if (Test-Path "qt/build/$d") { Copy-Item -Recurse "qt/build/$d" staging/ }
+          }
+          Copy-Item -Recurse web/dist/* staging/web/
 
       - name: Create zip (for auto-updater)
-        shell: bash
+        shell: pwsh
         run: |
-          cd staging
-          7z a ../cove-windows-amd64.zip .
-          cd ..
+          Compress-Archive -Path staging/* -DestinationPath cove-windows-amd64.zip
 
       - name: Create NSIS installer
-        shell: bash
+        shell: pwsh
         run: |
-          PKG_VER="${{ github.ref_name }}"
-          makensis -DVERSION="$PKG_VER" packaging/windows/cove.nsi
+          makensis /DVERSION="${{ github.ref_name }}" /DOUTDIR="${{ github.workspace }}" packaging/windows/cove.nsi
 
       - name: Upload release assets
         uses: softprops/action-gh-release@v2
