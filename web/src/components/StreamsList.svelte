@@ -252,11 +252,17 @@
     const filtered = list.filter(
       (s) => qualityFilter === "all" || s.quality === qualityFilter,
     );
-    filtered.sort((a, b) =>
-      sortMode === "seeders"
+    const preferred = $settings?.defaultProvider;
+    filtered.sort((a, b) => {
+      if (preferred) {
+        const aPref = a.addonName === preferred ? 1 : 0;
+        const bPref = b.addonName === preferred ? 1 : 0;
+        if (aPref !== bPref) return bPref - aPref;
+      }
+      return sortMode === "seeders"
         ? b.seeders - a.seeders
-        : b.sizeBytes - a.sizeBytes,
-    );
+        : b.sizeBytes - a.sizeBytes;
+    });
     return filtered;
   });
 
@@ -300,7 +306,10 @@
             streams,
             ($settings.streamSelectionMode as StreamSelectionMode) ??
               "balanced",
-            { measuredBandwidthMbps: $settings.measuredBandwidthMbps },
+            {
+              measuredBandwidthMbps: $settings.measuredBandwidthMbps,
+              preferredProvider: $settings.defaultProvider,
+            },
           );
           if (best) {
             const mode = $settings.streamSelectionMode ?? "balanced";
@@ -663,6 +672,16 @@
                     <span class="rounded bg-background/70 px-1.5 py-0.5">
                       {inferQuality(stream)}
                     </span>
+                    {#if stream.addonName}
+                      <span
+                        class="rounded px-1.5 py-0.5 {stream.addonName ===
+                        $settings?.defaultProvider
+                          ? 'bg-accent text-accent-foreground'
+                          : 'bg-background/70'}"
+                      >
+                        {stream.addonName}
+                      </span>
+                    {/if}
                   </span>
                 </button>
               {/each}

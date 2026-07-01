@@ -111,15 +111,39 @@ interface ScoredStream {
   seeders: number;
   sizeBytes: number;
   quality: string | null;
+  isPreferred: boolean;
 }
 
-function scoreCandidates(streams: Stream[]): ScoredStream[] {
+function scoreCandidates(
+  streams: Stream[],
+  preferredProvider?: string,
+): ScoredStream[] {
   return streams.map((s) => ({
     stream: s,
     seeders: getSeeders(s),
     sizeBytes: getSizeBytes(s),
     quality: inferQuality(s),
+    isPreferred: !!preferredProvider && s.addonName === preferredProvider,
   }));
+}
+
+// A preferred-provider stream only wins a close call — this bonus is small
+// enough that a real quality/seeder gap from another provider still wins.
+const PROVIDER_BOOST = 0.15;
+
+/** Sorts by a mode's normalized 0..1 metric (higher = better), plus a small
+ * bonus for the preferred provider, falling back to `tiebreak` on ties. */
+function sortByBoostedDesc(
+  pool: ScoredStream[],
+  normalize: (c: ScoredStream) => number,
+  tiebreak: (a: ScoredStream, b: ScoredStream) => number,
+): ScoredStream {
+  return pool.toSorted((a, b) => {
+    const boostedA = normalize(a) + (a.isPreferred ? PROVIDER_BOOST : 0);
+    const boostedB = normalize(b) + (b.isPreferred ? PROVIDER_BOOST : 0);
+    const diff = boostedB - boostedA;
+    return diff !== 0 ? diff : tiebreak(a, b);
+  })[0];
 }
 
 export interface PickBestOptions {
@@ -127,6 +151,8 @@ export interface PickBestOptions {
   measuredBandwidthMbps?: number;
   /** Runtime estimate used only by "bandwidth" mode's bitrate-budget math. */
   estimatedMinutes?: number;
+  /** Matched against Stream.addonName — see Settings.defaultProvider. */
+  preferredProvider?: string;
 }
 
 /**
@@ -140,15 +166,26 @@ export function pickBestStream(
 ): Stream | null {
   if (streams.length === 0) return null;
 
-  const all = scoreCandidates(streams);
+  const all = scoreCandidates(streams, opts.preferredProvider);
   // A zero-seeder torrent will likely never actually start downloading, so
   // exclude them from consideration — unless it's literally the only option.
   const withSeeders = all.filter((c) => c.seeders > 0);
   const pool = withSeeders.length > 0 ? withSeeders : all;
 
+  const qualityTiebreak = (a: ScoredStream, b: ScoredStream) => {
+    const qDiff = qualityRank(b.quality) - qualityRank(a.quality);
+    return qDiff !== 0 ? qDiff : b.seeders - a.seeders;
+  };
+
   switch (mode) {
-    case "seeders":
-      return pool.toSorted((a, b) => b.seeders - a.seeders)[0].stream;
+    case "seeders": {
+      const maxSeeders = Math.max(1, ...pool.map((c) => c.seeders));
+      return sortByBoostedDesc(
+        pool,
+        (c) => c.seeders / maxSeeders,
+        (a, b) => b.seeders - a.seeders,
+      ).stream;
+    }
 
     case "smallest": {
       // Don't let "smallest" devolve into picking a cam-quality rip just
@@ -157,14 +194,23 @@ export function pickBestStream(
         (c) => qualityRank(c.quality) >= qualityRank("480p"),
       );
       const fromPool = decent.length > 0 ? decent : pool;
-      return fromPool.toSorted((a, b) => a.sizeBytes - b.sizeBytes)[0].stream;
+      const knownSizes = fromPool.map((c) => c.sizeBytes).filter((b) => b > 0);
+      const maxSize = Math.max(1, ...knownSizes);
+      return sortByBoostedDesc(
+        fromPool,
+        (c) => (c.sizeBytes > 0 ? 1 - c.sizeBytes / maxSize : 0.5),
+        (a, b) => a.sizeBytes - b.sizeBytes,
+      ).stream;
     }
 
-    case "quality":
-      return pool.toSorted((a, b) => {
-        const qDiff = qualityRank(b.quality) - qualityRank(a.quality);
-        return qDiff !== 0 ? qDiff : b.seeders - a.seeders;
-      })[0].stream;
+    case "quality": {
+      const maxRank = Math.max(1, ...pool.map((c) => qualityRank(c.quality)));
+      return sortByBoostedDesc(
+        pool,
+        (c) => qualityRank(c.quality) / maxRank,
+        qualityTiebreak,
+      ).stream;
+    }
 
     case "bandwidth": {
       const mbps = opts.measuredBandwidthMbps;
@@ -182,10 +228,15 @@ export function pickBestStream(
         (c) => c.sizeBytes > 0 && c.sizeBytes <= budgetBytes,
       );
       const fromPool = withinBudget.length > 0 ? withinBudget : pool;
-      return fromPool.toSorted((a, b) => {
-        const qDiff = qualityRank(b.quality) - qualityRank(a.quality);
-        return qDiff !== 0 ? qDiff : b.seeders - a.seeders;
-      })[0].stream;
+      const maxRank = Math.max(
+        1,
+        ...fromPool.map((c) => qualityRank(c.quality)),
+      );
+      return sortByBoostedDesc(
+        fromPool,
+        (c) => qualityRank(c.quality) / maxRank,
+        qualityTiebreak,
+      ).stream;
     }
 
     case "balanced":
@@ -193,15 +244,17 @@ export function pickBestStream(
       const maxSeeders = Math.max(1, ...pool.map((c) => c.seeders));
       const knownSizes = pool.map((c) => c.sizeBytes).filter((b) => b > 0);
       const maxSize = Math.max(1, ...knownSizes);
-      return pool
-        .map((c) => {
+      return sortByBoostedDesc(
+        pool,
+        (c) => {
           const seederScore = c.seeders / maxSeeders;
           // Streams with no parsed size aren't penalized or rewarded — treat
           // as a neutral midpoint rather than guessing.
           const sizeScore = c.sizeBytes > 0 ? 1 - c.sizeBytes / maxSize : 0.5;
-          return { c, score: seederScore * 0.6 + sizeScore * 0.4 };
-        })
-        .toSorted((a, b) => b.score - a.score)[0].c.stream;
+          return seederScore * 0.6 + sizeScore * 0.4;
+        },
+        () => 0,
+      ).stream;
     }
   }
 }

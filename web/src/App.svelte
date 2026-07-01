@@ -390,6 +390,7 @@
       ($settings?.streamSelectionMode as StreamSelectionMode) ?? "balanced";
     const best = pickBestStream(streams, mode, {
       measuredBandwidthMbps: $settings?.measuredBandwidthMbps,
+      preferredProvider: $settings?.defaultProvider,
     });
     if (!best) return;
 

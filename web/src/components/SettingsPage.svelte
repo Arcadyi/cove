@@ -68,6 +68,10 @@
     addons = await api.getAddons();
   }
 
+  const providerAddons = $derived(
+    addons.filter((a) => a.kind === KindProvider),
+  );
+
   async function handleAddAddon() {
     if (!addAddonUrl.trim()) return;
     addAddonLoading = true;
@@ -348,6 +352,37 @@
             <Select.Content>
               {#each STREAM_SELECTION_MODES as m (m.value)}
                 <Select.Item value={m.value}>{m.label}</Select.Item>
+              {/each}
+            </Select.Content>
+          </Select.Root>
+        </div>
+        <Separator />
+
+        <div class="flex items-center justify-between py-3">
+          <div class="pr-4">
+            <Label class="text-sm font-medium">Preferred provider</Label>
+            <p class="text-xs text-muted-foreground">
+              {#if providerAddons.length === 0}
+                Add a provider addon in the Addons tab to set a preference.
+              {:else}
+                Its streams are shown first and favored by auto-select.
+              {/if}
+            </p>
+          </div>
+          <Select.Root
+            type="single"
+            bind:value={draft.defaultProvider}
+            disabled={providerAddons.length === 0}
+          >
+            <Select.Trigger class="w-56 shrink-0">
+              {draft.defaultProvider || "No preference"}
+            </Select.Trigger>
+            <Select.Content>
+              <Select.Item value="">No preference</Select.Item>
+              {#each providerAddons as a (a.id)}
+                <Select.Item value={a.manifest.name}
+                >{a.manifest.name}</Select.Item
+                >
               {/each}
             </Select.Content>
           </Select.Root>
