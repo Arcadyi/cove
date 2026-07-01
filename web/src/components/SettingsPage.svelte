@@ -550,8 +550,7 @@
           <Label class="mb-2 block text-sm font-medium">Add Stremio addon</Label
           >
           <p class="mb-3 text-xs text-muted-foreground">
-            Paste a Stremio-compatible addon URL (e.g.
-            https://torrentio.strem.fun).
+            Paste a Stremio-compatible addon manifest URL.
           </p>
           <div class="flex gap-2">
             <Input

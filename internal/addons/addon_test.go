@@ -11,9 +11,9 @@ func TestNormalizeAddonURL(t *testing.T) {
 		input string
 		want  string
 	}{
-		{"https://torrentio.strem.fun/manifest.json", "https://torrentio.strem.fun"},
-		{"https://torrentio.strem.fun/", "https://torrentio.strem.fun"},
-		{"https://torrentio.strem.fun", "https://torrentio.strem.fun"},
+		{"https://addon.example/manifest.json", "https://addon.example"},
+		{"https://addon.example/", "https://addon.example"},
+		{"https://addon.example", "https://addon.example"},
 		{"https://example.com/some/path/manifest.json", "https://example.com/some/path"},
 		{"https://example.com/some/path/", "https://example.com/some/path"},
 		{"https://example.com/some/path", "https://example.com/some/path"},

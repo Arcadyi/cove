@@ -8,7 +8,7 @@ const DEFAULTS: Settings = {
   defaultVolume: 1.0,
   autoPlay: false,
   rememberPosition: true,
-  defaultProvider: "torrentio",
+  defaultProvider: "",
   subtitlesEnabled: false,
   defaultSubtitleLang: "en",
   defaultAudioLang: "en",

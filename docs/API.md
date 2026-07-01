@@ -107,7 +107,7 @@ Always compiled identically.
 | `/api/settings` | PUT | full `Settings` struct — **whole-object replace, no partial merge**; any field you omit is written as its Go zero value, not left as the previous value | echoes the saved `Settings` |
 
 `Settings` fields (defaults in parens): `openOnMute`, `defaultVolume(1.0)`,
-`autoPlay`, `rememberPosition(true)`, `defaultProvider("torrentio")`,
+`autoPlay`, `rememberPosition(true)`, `defaultProvider("")`,
 `autoSelectStream`, `streamSelectionMode("balanced")`, `measuredBandwidthMbps`,
 `subtitlesEnabled`, `defaultSubtitleLang("en")`, `defaultAudioLang("en")`,
 `subtitleSize(100)`, `subtitlePosition(8)`, `subtitleBackground(true)`,

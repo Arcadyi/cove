@@ -64,7 +64,7 @@ var defaultSettings = Settings{
 	DefaultVolume:         1.0,
 	AutoPlay:              false,
 	RememberPosition:      true,
-	DefaultProvider:       "torrentio",
+	DefaultProvider:       "",
 	AutoSelectStream:      false,
 	StreamSelectionMode:   "balanced",
 	MeasuredBandwidthMbps: 0,

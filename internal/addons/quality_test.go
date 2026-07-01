@@ -14,7 +14,7 @@ func TestInferQuality(t *testing.T) {
 	}{
 		{
 			name:   "4K in name",
-			stream: Stream{Name: "torrentio\n4K\nSome.Movie.4K.mkv"},
+			stream: Stream{Name: "addon\n4K\nSome.Movie.4K.mkv"},
 			want:   "4k",
 		},
 		{
