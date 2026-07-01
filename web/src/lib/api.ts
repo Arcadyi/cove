@@ -43,7 +43,7 @@ export function setTokenSource(getter: () => string | null): void {
 // fetch"). We cap how many fetches are actually in flight; the rest wait in a
 // cheap in-memory queue rather than as pending browser requests.
 //
-// Only request/requestOrNull go through this. Long-lived streams (HLS, the
+// Only request/requestOrNull go through this. Long-lived streams (the
 // progress SSE, speedtest) deliberately bypass it — they'd hold a slot open
 // indefinitely and starve everything else.
 const MAX_CONCURRENT = 8;
@@ -367,14 +367,6 @@ export const api = {
   playUrl: (src: string): string =>
     isHashSrc(src) ? `${BASE}/play?hash=${src}` : src,
 
-  hlsMasterUrl: (sessionId: string): string =>
-    `${BASE}/hls/${sessionId}/master.m3u8`,
-
-  subtitleExtractUrl: (src: string, index: number): string => {
-    const q = isHashSrc(src) ? `hash=${src}` : `url=${encodeURIComponent(src)}`;
-    return `${BASE}/subtitle/extract?${q}&index=${index}`;
-  },
-
   subtitleProxyUrl: (externalUrl: string): string =>
     `${BASE}/subtitle-proxy?url=${encodeURIComponent(externalUrl)}`,
 
@@ -383,40 +375,6 @@ export const api = {
 
   /** Fixed-size payload endpoint for the in-app bandwidth test. Caller measures blob size vs. elapsed time. */
   speedtestUrl: (): string => `${BASE}/speedtest`,
-
-  // ── Player: probe & HLS session ───────────────────────────────────────────────
-
-  /** Generic probe endpoint; caller supplies the result shape. */
-  probe: <T = unknown>(src: string, signal?: AbortSignal): Promise<T> => {
-    const q = isHashSrc(src) ? `hash=${src}` : `url=${encodeURIComponent(src)}`;
-    return request(`/probe?${q}`, signal ? { signal } : undefined);
-  },
-
-  hlsStart: (
-    body: {
-      input: string;
-      tracks: unknown[];
-      duration: number;
-      videoCodec: string;
-    },
-    signal?: AbortSignal,
-  ): Promise<{ sessionID: string }> =>
-    request(`/hls/start`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-      signal,
-    }),
-
-  // Fire-and-forget teardown. keepalive lets it complete during page unload /
-  // component destroy, when a normal fetch would be cancelled. Not awaited.
-  hlsStop: (sessionId: string): void => {
-    fetch(`${BASE}/hls/stop/${sessionId}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      keepalive: true,
-    }).catch((e) => console.error("hls stop failed for " + sessionId, e));
-  },
 
   // ── Settings ─────────────────────────────────────────────────────────────────
   getSettings: (): Promise<Settings> => request(`/settings`),

@@ -2,6 +2,15 @@
 
 //////////
 // source: library.go
+/*
+Package library is the local watch-history store: library entries (status,
+rating), per-episode watch progress, and "not interested" dismissals,
+persisted as JSON per profile under the OS config directory. It exposes
+TasteSignals() and Generation() as the sole interface the recommendation
+engine (internal/discover) consumes — neither package imports the other,
+so a personalization feature can evolve independently of how watch history
+is stored.
+*/
 
 export type Status = string;
 export const StatusWatchLater: Status = "watch_later";
@@ -80,9 +89,9 @@ export interface TasteSignal {
 }
 export interface Stats {
   total: number /* int */; // library entries (dismissals excluded)
-  by_type: { [key: string]: number /* int */ }; // entries per media type
-  by_status: { [key: string]: number /* int */ }; // status -> count
-  finished: { [key: string]: number /* int */ }; // finished entries per type
+  by_type: { [key: string]: number /* int */}; // entries per media type
+  by_status: { [key: string]: number /* int */}; // status -> count
+  finished: { [key: string]: number /* int */}; // finished entries per type
   dismissed: number /* int */;
   rated: number /* int */;
   avg_rating: number /* float64 */; // mean user rating over rated titles, 0–5
@@ -95,4 +104,5 @@ export interface Stats {
  * tygo emits nothing for this type — only the JSON data types (LibraryEntry,
  * WatchProgress, diskStore) cross into the generated TS.
  */
-export interface Library {}
+export interface Library {
+}

@@ -2,6 +2,14 @@
 
 //////////
 // source: addon.go
+/*
+Package addons manages Stremio-compatible provider/subtitle addons and a
+couple of bespoke "official" integrations (JustWatch availability, IntroDB
+timestamps) that aren't Stremio addons at all despite sharing the same
+AddonEntry shape. Fan-out across multiple enabled addons of the same kind
+is a sequential loop with per-addon failures swallowed — one broken addon
+should never break the ones that work.
+*/
 
 export type AddonKind = string;
 export type AddonSource = string;
@@ -85,7 +93,9 @@ export interface TimestampData {
  * the data types (AddonEntry, Stream, Subtitle, WatchOption, etc.) cross into
  * the generated TS.
  */
-export interface Manager {}
+export interface Manager {
+}
 
 //////////
 // source: store.go
+

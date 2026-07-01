@@ -2,6 +2,14 @@
 
 //////////
 // source: settings.go
+/*
+Package settings persists a single flat Settings struct per profile as
+JSON, served whole-object over GET/PUT with no partial-merge semantics —
+a PUT that omits a field writes its Go zero value, not the previous
+value. Select-style preferences (e.g. streamSelectionMode,
+discoveryAlgorithm) are plain strings with no server-side enum
+validation; the frontend owns the allowed-value metadata and UI.
+*/
 
 /**
  * Settings holds all user-configurable preferences persisted to disk.
@@ -18,7 +26,6 @@ export interface Settings {
    * Provider / streams
    */
   defaultProvider: string;
-  preferHLS: boolean;
   /**
    * Stream auto-selection
    */
@@ -60,4 +67,5 @@ export interface Settings {
  * Store owns the package's mutable state. Fields are unexported, so tygo emits
  * nothing for Store — only the Settings data type crosses into the generated TS.
  */
-export interface Store {}
+export interface Store {
+}

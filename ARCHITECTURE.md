@@ -123,14 +123,14 @@ progress UI is still open, from being collected mid-watch. Without this
 reaper, downloaded pieces and open file handles would accumulate for the life
 of the process.
 
-**Known vestigial code**, left in place but unused, worth knowing about
-before you go looking for it: `internal/settings.Settings.PreferHLS`,
-`web/src/lib/api.ts`'s `hlsStart`/`hlsStop`/`hlsMasterUrl`/`probe`, and
-`web/src/lib/player/subtitleCues.svelte.ts` (a WebVTT cue-tracker with no
-current callers) are all remnants of an earlier browser-video + HLS.js
-architecture that predates the current mpv/Qt shell. `player.NewServer()`
-(`player.go:263`) also appears unused — `main.go` builds its own inline
-`*http.Server`.
+An earlier browser-video + HLS.js architecture (predating the current mpv/Qt
+shell) left behind an unused `Settings.PreferHLS` field, `api.ts`'s
+`hlsStart`/`hlsStop`/`hlsMasterUrl`/`probe`/`subtitleExtractUrl`, a
+`subtitleCues.svelte.ts` WebVTT cue-tracker with no callers, and an unused
+`player.NewServer()` helper (`main.go` built its own inline `*http.Server`).
+All of this has since been removed — mentioned here only so a future
+spelunk through git history for "HLS" doesn't look like it's chasing a
+still-live feature.
 
 ## The Qt shell in detail
 
@@ -219,15 +219,14 @@ hundreds of metadata requests at once, and Chromium throws
 in-flight `Map` keyed by request signature, so duplicate concurrent GETs
 share one promise instead of re-firing), and a single `BASE` URL constant
 (overridable via `VITE_API_BASE`) that every other URL-builder in the file
-routes through. HLS streaming, torrent progress SSE, and the speed test
-deliberately bypass the concurrency limiter — they'd hold a slot open
-indefinitely.
+routes through. The torrent progress SSE and the speed test deliberately
+bypass the concurrency limiter — they'd hold a slot open indefinitely.
 
 UI components come from **shadcn-svelte** (built on **bits-ui** primitives),
-styled with **TailwindCSS 4**; the video element itself is **vidstack**
-(with `hls.js`/`dashjs` as underlying engines, though see the vestigial-HLS
-note above for why that's less load-bearing than it sounds for this app's
-actual playback path).
+styled with **TailwindCSS 4**. `vidstack` powers `PlayerSimple.svelte`, a
+separate lightweight browser-native player used for trailer/preview clips in
+cards, carousels, and modals — it's unrelated to the main mpv-backed content
+player (`Player.svelte`) described above.
 
 ## The OSS/proprietary split
 

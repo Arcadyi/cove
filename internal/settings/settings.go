@@ -27,7 +27,6 @@ type Settings struct {
 
 	// Provider / streams
 	DefaultProvider string `json:"defaultProvider"`
-	PreferHLS       bool   `json:"preferHLS"`
 
 	// Stream auto-selection
 	AutoSelectStream      bool    `json:"autoSelectStream"`      // skip the manual stream list and play immediately
@@ -66,7 +65,6 @@ var defaultSettings = Settings{
 	AutoPlay:              false,
 	RememberPosition:      true,
 	DefaultProvider:       "torrentio",
-	PreferHLS:             true,
 	AutoSelectStream:      false,
 	StreamSelectionMode:   "balanced",
 	MeasuredBandwidthMbps: 0,

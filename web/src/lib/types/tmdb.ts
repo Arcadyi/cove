@@ -2,13 +2,22 @@
 
 //////////
 // source: tmdb.go
+/*
+Package tmdb wraps The Movie Database API and registers the largest single
+group of HTTP routes in the app (search, details, images, videos,
+providers, similar-titles, genre lists, a batched quality-probe endpoint).
+TMDB concerns only live here — anything resembling personalization or
+taste scoring belongs in internal/discover instead, which depends on this
+package for raw metadata but never the reverse.
+*/
 
 /**
  * Client talks to the TMDB API. Fields are unexported, so tygo emits nothing
  * for Client — only the data types (Media, Details, MediaImages, ...) cross
  * into the generated TS.
  */
-export interface Client {}
+export interface Client {
+}
 export interface Media {
   id: number /* int */;
   title: string;

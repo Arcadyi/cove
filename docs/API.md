@@ -108,8 +108,7 @@ Always compiled identically.
 
 `Settings` fields (defaults in parens): `openOnMute`, `defaultVolume(1.0)`,
 `autoPlay`, `rememberPosition(true)`, `defaultProvider("torrentio")`,
-`preferHLS(true)` *(vestigial — see ARCHITECTURE.md)*, `autoSelectStream`,
-`streamSelectionMode("balanced")`, `measuredBandwidthMbps`,
+`autoSelectStream`, `streamSelectionMode("balanced")`, `measuredBandwidthMbps`,
 `subtitlesEnabled`, `defaultSubtitleLang("en")`, `defaultAudioLang("en")`,
 `subtitleSize(100)`, `subtitlePosition(8)`, `subtitleBackground(true)`,
 `showStreamDetails(true)`, `hideSpoilers`, `autoSkipIntro/Recap/Credits/Preview`,

@@ -266,16 +266,6 @@ func formatSpeed(bytesPerSec int64) string {
 	}
 }
 
-// NewServer returns a pre-configured *http.Server with ReadHeaderTimeout set.
-func NewServer(addr string) *http.Server {
-	return &http.Server{
-		Addr: addr,
-		// Guards against slow-loris attacks. Torrent streaming runs for minutes,
-		// so WriteTimeout and IdleTimeout are intentionally not set.
-		ReadHeaderTimeout: 10 * time.Second,
-	}
-}
-
 func (p *Player) SetupHandlers(mux *http.ServeMux) {
 	mux.HandleFunc("/api/subtitles", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		tmdbID := r.URL.Query().Get("id")

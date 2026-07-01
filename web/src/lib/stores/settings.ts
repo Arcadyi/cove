@@ -9,7 +9,6 @@ const DEFAULTS: Settings = {
   autoPlay: false,
   rememberPosition: true,
   defaultProvider: "torrentio",
-  preferHLS: true,
   subtitlesEnabled: false,
   defaultSubtitleLang: "en",
   defaultAudioLang: "en",
