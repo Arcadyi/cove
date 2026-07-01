@@ -82,13 +82,6 @@ server's URL or, in `--dev` mode, Vite's dev server at `localhost:5173`.
   stub and proprietary functionality.
 
 ## Playback data flow
-
-This is worth documenting precisely because the app has changed shape here
-and stale descriptions (including a previous version of this repo's own
-CLAUDE.md) still describe an HLS-transcoding pipeline that **no longer
-exists**. There is no ffmpeg invocation, no `.m3u8` generation, and no
-transcode step anywhere in the current code. Playback is direct passthrough:
-
 1. The frontend requests candidate streams for a title via `GET /api/streams`
    (`internal/player/player.go:316`), which fans out to
    `addons.Manager.GetAllStreams` — each enabled provider addon contributes infohashes and/or direct URLs.
