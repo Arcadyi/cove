@@ -6,7 +6,8 @@
 #   make go|web|qt  # build a single component
 #   make web-dev    # Vite dev server (browser only — no mpv bridge)
 #   make patch      # bump patch version, stage all pending changes, commit, tag
-#                   # (optionally: make patch MSG="note" to add a commit message note)
+#                   # (optionally: make patch TITLE="..." MSG="..." to override the
+#                   # commit title / add a commit message body note)
 #                   # (then: git push origin master v<ver>)
 #   make clean      # remove build artifacts
 
@@ -89,17 +90,19 @@ hot-debug: go qt
 	QTWEBENGINE_REMOTE_DEBUGGING=9222 bash scripts/dev-hot.sh
 
 ## Bump patch version in web/package.json, stage all pending changes, commit,
-## and tag for release. Pass MSG="..." to add a note to the commit message,
-## e.g. `make patch MSG="fix quick-play loading state"`.
+## and tag for release. Pass TITLE="..." to override the default commit title
+## and/or MSG="..." to add a commit message body note, e.g.
+## `make patch TITLE="fix quick-play loading state"`.
 ## Then push with: git push origin master v<version>
 patch:
 	cd $(WEB_DIR) && npm version patch --no-git-tag-version
 	@NEW_VER=$$(node -p "require('./$(WEB_DIR)/package.json').version"); \
+	TITLE="$(if $(TITLE),$(TITLE),chore: bump version to v$$NEW_VER)"; \
 	git add -A && \
 	if [ -n "$(MSG)" ]; then \
-		git commit -m "chore: bump version to v$$NEW_VER" -m "$(MSG)"; \
+		git commit -m "$$TITLE" -m "$(MSG)"; \
 	else \
-		git commit -m "chore: bump version to v$$NEW_VER"; \
+		git commit -m "$$TITLE"; \
 	fi && \
 	git tag "v$$NEW_VER" && \
 	echo "" && \
