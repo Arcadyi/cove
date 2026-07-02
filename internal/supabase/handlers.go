@@ -10,6 +10,8 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"sync"
+	"sync/atomic"
 
 	"github.com/coveninja/cove/internal/addons"
 	"github.com/coveninja/cove/internal/library"
@@ -25,6 +27,35 @@ type Server struct {
 	lib          *library.Library
 	st           *settings.Store
 	addonMgr     *addons.Manager
+
+	// pushMu serializes background pushes; pushQueued coalesces bursts so
+	// rapid sync calls queue at most one extra push run instead of spawning
+	// an unbounded pile of overlapping goroutines.
+	pushMu     sync.Mutex
+	pushQueued atomic.Bool
+}
+
+// pushAsync uploads the profile's library/settings/addons in the background.
+// A push already queued behind a running one will observe this call's data
+// too, so additional requests are dropped rather than stacked.
+func (s *Server) pushAsync(userJWT, profileID, context string) {
+	if !s.pushQueued.CompareAndSwap(false, true) {
+		return
+	}
+	go func() {
+		s.pushMu.Lock()
+		defer s.pushMu.Unlock()
+		s.pushQueued.Store(false)
+		if err := s.cfg.PushLibrary(userJWT, profileID, s.lib); err != nil {
+			log.Println(context+": push library:", err)
+		}
+		if err := s.cfg.PushSettings(userJWT, profileID, s.st); err != nil {
+			log.Println(context+": push settings:", err)
+		}
+		if err := s.cfg.PushAddons(userJWT, profileID, s.addonMgr); err != nil {
+			log.Println(context+": push addons:", err)
+		}
+	}()
 }
 
 // NewServer creates the auth handler set. cfg may be nil (Supabase not configured),
@@ -149,23 +180,12 @@ func (s *Server) finishRegistration(w http.ResponseWriter, userID, accessToken, 
 	if err := s.profileStore.LinkSupabase(activeProfile.ID, userID); err != nil {
 		log.Println("supabase register: link profile:", err)
 	}
-	if err := s.cfg.EnsureProfile(activeProfile.ID, userID, profileName, activeProfile.IsPrimary); err != nil {
+	if err := s.cfg.EnsureProfile(accessToken, activeProfile.ID, userID, profileName, activeProfile.IsPrimary); err != nil {
 		http.Error(w, "could not create remote profile: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	profileID := activeProfile.ID
-	go func() {
-		if err := s.cfg.PushLibrary(profileID, s.lib); err != nil {
-			log.Println("supabase register: push library:", err)
-		}
-		if err := s.cfg.PushSettings(profileID, s.st); err != nil {
-			log.Println("supabase register: push settings:", err)
-		}
-		if err := s.cfg.PushAddons(profileID, s.addonMgr); err != nil {
-			log.Println("supabase register: push addons:", err)
-		}
-	}()
+	s.pushAsync(accessToken, activeProfile.ID, "supabase register")
 
 	jsonOK(w, map[string]any{
 		"access_token":  accessToken,
@@ -201,7 +221,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.mergeRemote(userID)
+	s.mergeRemote(userID, accessToken)
 
 	jsonOK(w, map[string]any{
 		"access_token":  accessToken,
@@ -264,7 +284,7 @@ func (s *Server) handleVerifyOTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.mergeRemote(userID)
+	s.mergeRemote(userID, accessToken)
 
 	jsonOK(w, map[string]any{
 		"access_token":  accessToken,
@@ -322,27 +342,22 @@ func (s *Server) handleSync(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Pull remote → merge locally.
-	s.mergeRemote(userID)
+	s.mergeRemote(userID, token)
 
 	// Push local → remote (catches any records that failed during initial push).
-	profileID := s.profileStore.ActiveProfile().ID
-	go func() {
-		if err := s.cfg.PushLibrary(profileID, s.lib); err != nil {
-			log.Println("supabase sync: push library:", err)
-		}
-		if err := s.cfg.PushSettings(profileID, s.st); err != nil {
-			log.Println("supabase sync: push settings:", err)
-		}
-		if err := s.cfg.PushAddons(profileID, s.addonMgr); err != nil {
-			log.Println("supabase sync: push addons:", err)
-		}
-	}()
+	s.pushAsync(token, s.profileStore.ActiveProfile().ID, "supabase sync")
 
-	jsonOK(w, map[string]string{"status": "ok"})
+	// library_generation lets the frontend tell whether the merge actually
+	// changed anything, so an idle focus-triggered sync doesn't force a full
+	// UI refetch.
+	jsonOK(w, map[string]any{
+		"status":             "ok",
+		"library_generation": s.lib.Generation(),
+	})
 }
 
 // mergeRemote pulls all Supabase data for a user and merges it into the active profile.
-func (s *Server) mergeRemote(supabaseUID string) {
+func (s *Server) mergeRemote(supabaseUID, userJWT string) {
 	active := s.profileStore.ActiveProfile()
 
 	// Link UID to profile if not already set.
@@ -352,7 +367,7 @@ func (s *Server) mergeRemote(supabaseUID string) {
 		}
 	}
 
-	pulled, err := s.cfg.PullAll(active.ID)
+	pulled, err := s.cfg.PullAll(userJWT, active.ID)
 	if err != nil {
 		log.Println("supabase: pull:", err)
 		return

@@ -132,6 +132,11 @@
       : null,
   );
 
+  // Focus-triggered auth sync bookkeeping (not $state — plain instance vars
+  // read/written only from the onFocus handler below).
+  let lastAuthSyncMs = 0;
+  let lastLibraryGeneration: number | null = null;
+
   // Load settings once on startup so all components have values immediately.
   onMount(() => {
     setMode("dark");
@@ -180,16 +185,31 @@
     window.addEventListener("unhandledrejection", onRejection);
     window.addEventListener("error", onError);
 
-    // Pull remote changes on window focus when signed in.
+    // Pull remote changes on window focus when signed in. Guarded so rapid
+    // focus/blur cycling (alt-tabbing) doesn't trigger a sync — and downstream
+    // refetch storm across every MediaCard + ContinueWatching — on every
+    // single focus.
     const onFocus = () => {
-      if (!auth.isGuest) {
-        api
-          .authSync()
-          .then(() => {
+      if (auth.isGuest) return;
+      const now = Date.now();
+      if (now - lastAuthSyncMs < 60_000) return;
+      lastAuthSyncMs = now;
+      api
+        .authSync()
+        .then((res) => {
+          // Only bump when the library actually changed remotely. Older
+          // backends / a noop build (503) omit library_generation entirely —
+          // fall back to the old always-bump behavior for those.
+          if (typeof res.library_generation === "number") {
+            if (res.library_generation !== lastLibraryGeneration) {
+              lastLibraryGeneration = res.library_generation;
+              libraryChanged.update((n) => n + 1);
+            }
+          } else {
             libraryChanged.update((n) => n + 1);
-          })
-          .catch(() => {});
-      }
+          }
+        })
+        .catch(() => {});
     };
     window.addEventListener("focus", onFocus);
 
@@ -629,8 +649,14 @@
             easing: cubicOut,
           }}
         >
+          <!-- Streams whose origin needs extra headers (Nuvio CDNs) must go
+               through the backend proxy — mpv fetching the raw URL directly
+               would drop the Referer/Origin the host requires. -->
           <PlayerComponent
-            src={playerSession.stream.infoHash || playerSession.stream.url}
+            src={playerSession.stream.infoHash ||
+              (playerSession.stream.headers
+                ? api.playProxyUrl(playerSession.stream.url)
+                : playerSession.stream.url)}
             media={playerSession.media}
             externalSubtitles={playerSession.subtitles}
             season={playerSession.season}

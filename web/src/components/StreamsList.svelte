@@ -73,6 +73,10 @@
   let watchOptions = $state<WatchOption[]>([]);
 
   let pollInterval: ReturnType<typeof setInterval> | null = null;
+  let pollAttempts = 0;
+  // Indexers that never turn anything up shouldn't poll forever — cap it and
+  // fall back to the existing empty state.
+  const MAX_POLL_ATTEMPTS = 20;
 
   // ── Auto stream selection ─────────────────────────────────────────────────────
 
@@ -195,32 +199,21 @@
   });
 
   $effect(() => {
-    if (isTV) {
-      if (!selectedEpisode || selectedSeason === null) return () => {};
-      clearPoll();
-      loadingStreams = true;
-      streams = [];
-      autoPickCancelled = false;
-      autoPicking = false;
-      showAlternatives = false;
-      fetchStreams().then(() => {
-        loadingStreams = false;
-        if (streams.length === 0)
-          pollInterval = setInterval(fetchStreams, 1000);
-      });
-    } else {
-      clearPoll();
-      loadingStreams = true;
-      streams = [];
-      autoPickCancelled = false;
-      autoPicking = false;
-      showAlternatives = false;
-      fetchStreams().then(() => {
-        loadingStreams = false;
-        if (streams.length === 0)
-          pollInterval = setInterval(fetchStreams, 1000);
-      });
-    }
+    if (isTV && (!selectedEpisode || selectedSeason === null))
+      return () => {};
+
+    clearPoll();
+    loadingStreams = true;
+    streams = [];
+    pollAttempts = 0;
+    autoPickCancelled = false;
+    autoPicking = false;
+    showAlternatives = false;
+    fetchStreams().then(() => {
+      loadingStreams = false;
+      if (streams.length === 0)
+        pollInterval = setInterval(pollFetchStreams, 1000);
+    });
 
     return () => clearPoll();
   });
@@ -277,6 +270,18 @@
       clearInterval(pollInterval);
       pollInterval = null;
     }
+  }
+
+  // setInterval callback for the empty-results poll. Stops itself (falling
+  // back to the existing "no streams" empty state) once MAX_POLL_ATTEMPTS is
+  // reached instead of retrying forever.
+  function pollFetchStreams(): void {
+    pollAttempts++;
+    if (pollAttempts > MAX_POLL_ATTEMPTS) {
+      clearPoll();
+      return;
+    }
+    fetchStreams();
   }
 
   async function fetchStreams(): Promise<void> {

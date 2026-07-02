@@ -20,6 +20,8 @@
       <img
         src={person.profile_path}
         alt={person.name}
+        loading="lazy"
+        decoding="async"
         class="h-full w-full object-cover transition-transform duration-200 group-hover:scale-105"
       />
     {:else}

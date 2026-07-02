@@ -2,7 +2,9 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -32,12 +34,12 @@ var Version = "dev"
 // During local development, set TMDB_API_KEY in a .env file instead.
 var TmdbApiKey = ""
 
-// Supabase credentials are injected at build time via -ldflags for release builds.
-// During local development, set them in a .env file instead.
+// Supabase credentials are injected at build time via -ldflags for release
+// builds. During local development, set them in a .env file instead. Only the
+// project URL and the publishable anon key are ever compiled in — anything
+// stronger (service key, JWT secret) must never ship inside a user binary.
 var SupabaseURL = ""
 var SupabaseAnonKey = ""
-var SupabaseServiceKey = ""
-var SupabaseJWTSecret = ""
 
 func main() {
 	// Load .env if present — for local development only.
@@ -87,7 +89,15 @@ func main() {
 	}
 	activeID := profileStore.ActiveProfileID()
 
-	addonMgr = addons.New(activeID)
+	tmdbClient := tmdb.New(apiKey)
+
+	addonMgr = addons.New(activeID, func(tmdbID int) string {
+		id, err := tmdbClient.GetTVIMDBId(tmdbID)
+		if err != nil {
+			return ""
+		}
+		return id
+	})
 	nuvioMgr = nuvio.New(activeID)
 
 	st, err = settings.New(activeID)
@@ -99,8 +109,6 @@ func main() {
 		log.Println("could not load library:", err)
 	}
 
-	tmdbClient := tmdb.New(apiKey)
-
 	// The torrent client is core functionality — if it can't start, there's
 	// nothing to stream, so a New failure is fatal.
 	p, err := player.New(tmdbClient, addonMgr, nuvioMgr)
@@ -110,13 +118,7 @@ func main() {
 
 	mux := http.DefaultServeMux
 
-	addonMgr.SetupHandlers(mux, func(tmdbID int) string {
-		id, err := tmdbClient.GetTVIMDBId(tmdbID)
-		if err != nil {
-			return ""
-		}
-		return id
-	})
+	addonMgr.SetupHandlers(mux)
 	tmdbClient.SetupHandlers(mux, addonMgr)
 	nuvioMgr.SetupHandlers(mux)
 	p.SetupHandlers(mux)
@@ -128,7 +130,7 @@ func main() {
 	// Supabase auth + sync (no-op if SUPABASE_URL is not set).
 	// Env vars take precedence; compiled-in ldflags values are the fallback for
 	// release builds where no .env file is present.
-	supaCfg := supapkg.ConfigFromEnv(SupabaseURL, SupabaseAnonKey, SupabaseServiceKey, SupabaseJWTSecret)
+	supaCfg := supapkg.ConfigFromEnv(SupabaseURL, SupabaseAnonKey)
 	supaServer := supapkg.NewServer(supaCfg, profileStore, lib, st, addonMgr)
 	supaServer.SetupHandlers(mux)
 
@@ -146,7 +148,6 @@ func main() {
 	}()
 
 	mux.HandleFunc("/api/ping", utils.CorsMiddleware(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
 		err := json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 		if err != nil {
 			log.Println(err)
@@ -155,11 +156,21 @@ func main() {
 	}))
 
 	srv := &http.Server{
-		Addr:              ":6969",
+		Addr:              "127.0.0.1:6969",
 		ReadHeaderTimeout: 10 * time.Second,
 		// Don't set WriteTimeout — torrent streaming is long-lived
 	}
 
-	log.Println("Server Running on: 6969")
+	// Chromium may resolve "localhost" to ::1, so also serve on the IPv6
+	// loopback when available. Best-effort: failure to bind is not fatal.
+	if l6, err := net.Listen("tcp", "[::1]:6969"); err == nil {
+		go func() {
+			if err := srv.Serve(l6); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				log.Println("ipv6 loopback listener:", err)
+			}
+		}()
+	}
+
+	log.Println("Server Running on: 127.0.0.1:6969")
 	log.Fatal(srv.ListenAndServe())
 }

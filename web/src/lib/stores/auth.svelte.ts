@@ -10,6 +10,17 @@ class AuthStore {
   // Private: JWT for injection into API requests.
   #token = $state<string | null>(null);
 
+  // Guards init() against running twice concurrently (e.g. a second onMount
+  // somewhere) — profilesList/clientSessionGet aren't safe to fire in flight
+  // twice, and onAuthStateChange would end up registered more than once.
+  #initialized = false;
+
+  // Last access token actually persisted via clientSessionSave. Restoring a
+  // session in init() calls supabase.auth.setSession(), which immediately
+  // fires onAuthStateChange with that exact same session — without this,
+  // that handler would needlessly re-save the identical token.
+  #lastSavedToken: string | null = null;
+
   get isGuest(): boolean {
     return this.session === null;
   }
@@ -19,6 +30,9 @@ class AuthStore {
   }
 
   async init(): Promise<void> {
+    if (this.#initialized) return;
+    this.#initialized = true;
+
     try {
       const data = await api.profilesList();
       this.profiles = data.profiles;
@@ -37,6 +51,7 @@ class AuthStore {
       console.log("[auth] init: restoring session for", saved.email);
       this.#token = saved.accessToken;
       this.session = { accessToken: saved.accessToken, email: saved.email };
+      this.#lastSavedToken = saved.accessToken;
 
       // Hand to Supabase JS for background token refresh management.
       if (supabase) {
@@ -57,6 +72,11 @@ class AuthStore {
       if (s) {
         this.#token = s.access_token;
         this.session = { accessToken: s.access_token, email: s.user.email ?? "" };
+        // The setSession() call above (restoring a persisted session) fires
+        // this handler immediately with the identical token — skip the
+        // redundant re-save; only a genuine refresh should write again.
+        if (s.access_token === this.#lastSavedToken) return;
+        this.#lastSavedToken = s.access_token;
         api.clientSessionSave({
           accessToken: s.access_token,
           refreshToken: s.refresh_token,
@@ -65,6 +85,7 @@ class AuthStore {
       } else if (event === "SIGNED_OUT") {
         this.#token = null;
         this.session = null;
+        this.#lastSavedToken = null;
         api.clientSessionDelete().catch(console.error);
       }
     });
@@ -84,8 +105,11 @@ class AuthStore {
     if (refreshToken) {
       console.log("[auth] setSession: saving session for", email);
       await api.clientSessionSave({ accessToken, refreshToken, email });
+      this.#lastSavedToken = accessToken;
       console.log("[auth] setSession: session saved");
-      // Also tell Supabase JS so it can set up its refresh timer.
+      // Also tell Supabase JS so it can set up its refresh timer. This fires
+      // onAuthStateChange with the same token we just saved above; #lastSavedToken
+      // being set already skips the redundant re-save there.
       if (supabase) {
         supabase.auth
           .setSession({ access_token: accessToken, refresh_token: refreshToken })
@@ -104,6 +128,7 @@ class AuthStore {
   async logout(): Promise<void> {
     this.#token = null;
     this.session = null;
+    this.#lastSavedToken = null;
     await api.clientSessionDelete().catch(console.error);
     if (supabase) await supabase.auth.signOut();
   }

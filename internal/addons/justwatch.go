@@ -5,7 +5,12 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"time"
 )
+
+// watchOptionsClient bounds the TMDB providers call so a hung upstream can't
+// pin the request goroutine (http.DefaultClient has no timeout).
+var watchOptionsClient = &http.Client{Timeout: 15 * time.Second}
 
 // fetchWatchOptions queries TMDB's watch/providers endpoint for a title and
 // returns the streaming availability for the US region. It uses os.Getenv
@@ -22,7 +27,7 @@ func fetchWatchOptions(mediaType, tmdbID string) ([]WatchOption, error) {
 		mediaType, tmdbID, apiKey,
 	)
 
-	resp, err := http.Get(url) //nolint:noctx
+	resp, err := watchOptionsClient.Get(url) //nolint:noctx
 	if err != nil {
 		return nil, err
 	}

@@ -60,29 +60,31 @@ class MpvRenderer : public QQuickFramebufferObject::Renderer {
 public:
   explicit MpvRenderer(MpvObject *obj) : m_obj(obj) {}
   ~MpvRenderer() override {
-    // Must free the render context while the GL context is current — which it
-    // is during renderer teardown on the render thread.
-    if (m_obj->m_mpvGl) {
-      mpv_render_context_free(m_obj->m_mpvGl);
-      m_obj->m_mpvGl = nullptr;
+    // Free the render context while the GL context is current — which it is
+    // during renderer teardown on the render thread. exchange() so ~MpvObject
+    // (GUI thread) and this dtor can't both free it.
+    if (mpv_render_context *gl = m_obj->m_mpvGl.exchange(nullptr)) {
+      mpv_render_context_set_update_callback(gl, nullptr, nullptr);
+      mpv_render_context_free(gl);
     }
   }
 
   QOpenGLFramebufferObject *createFramebufferObject(const QSize &size) override {
     // Lazily create mpv's render context the first time we have a GL context.
-    if (!m_obj->m_mpvGl) {
+    // Skipped entirely when libmpv itself failed to initialize (m_mpv null).
+    if (m_obj->m_mpv && !m_obj->m_mpvGl.load()) {
       mpv_opengl_init_params glInit{getProcAddressMpv, nullptr};
       mpv_render_param params[]{
           {MPV_RENDER_PARAM_API_TYPE,
            const_cast<char *>(MPV_RENDER_API_TYPE_OPENGL)},
           {MPV_RENDER_PARAM_OPENGL_INIT_PARAMS, &glInit},
           {MPV_RENDER_PARAM_INVALID, nullptr}};
-      if (mpv_render_context_create(&m_obj->m_mpvGl, m_obj->m_mpv, params) < 0) {
+      mpv_render_context *gl = nullptr;
+      if (mpv_render_context_create(&gl, m_obj->m_mpv, params) < 0) {
         qWarning() << "[mpv] failed to create render context";
-        m_obj->m_mpvGl = nullptr;
       } else {
-        mpv_render_context_set_update_callback(m_obj->m_mpvGl,
-                                               MpvObject::on_update, m_obj);
+        mpv_render_context_set_update_callback(gl, MpvObject::on_update, m_obj);
+        m_obj->m_mpvGl.store(gl);
         // The context now exists — let the object flush any deferred load. mpv
         // disables video if loadfile runs before the VO has a render context.
         QMetaObject::invokeMethod(m_obj, "handleRenderReady",
@@ -93,7 +95,8 @@ public:
   }
 
   void render() override {
-    if (!m_obj->m_mpvGl)
+    mpv_render_context *gl = m_obj->m_mpvGl.load();
+    if (!gl)
       return;
 
     QQuickOpenGLUtils::resetOpenGLState();
@@ -106,7 +109,7 @@ public:
         {MPV_RENDER_PARAM_OPENGL_FBO, &mpfbo},
         {MPV_RENDER_PARAM_FLIP_Y, &flipY},
         {MPV_RENDER_PARAM_INVALID, nullptr}};
-    mpv_render_context_render(m_obj->m_mpvGl, params);
+    mpv_render_context_render(gl, params);
 
     QQuickOpenGLUtils::resetOpenGLState();
   }
@@ -122,9 +125,12 @@ MpvObject::MpvObject(QQuickItem *parent) : QQuickFramebufferObject(parent) {
   // Qt, which formats via QLocale rather than the C locale.
   std::setlocale(LC_NUMERIC, "C");
 
+  // Init failures are soft: m_mpv stays null, every slot below no-ops, and
+  // the web UI shows its "player unavailable" state (via the `valid`
+  // property) instead of the whole shell aborting on a broken GL/mpv stack.
   m_mpv = mpv_create();
   if (!m_mpv) {
-    qFatal("[mpv] mpv_create() failed");
+    qWarning("[mpv] mpv_create() failed — video playback unavailable");
     return;
   }
 
@@ -136,7 +142,9 @@ MpvObject::MpvObject(QQuickItem *parent) : QQuickFramebufferObject(parent) {
   mpv_set_option_string(m_mpv, "msg-level", "all=error");
 
   if (mpv_initialize(m_mpv) < 0) {
-    qFatal("[mpv] mpv_initialize() failed");
+    qWarning("[mpv] mpv_initialize() failed — video playback unavailable");
+    mpv_terminate_destroy(m_mpv);
+    m_mpv = nullptr;
     return;
   }
 
@@ -161,9 +169,16 @@ MpvObject::MpvObject(QQuickItem *parent) : QQuickFramebufferObject(parent) {
 }
 
 MpvObject::~MpvObject() {
-  // The render context is freed by the renderer (render thread). Here we just
-  // tear down the handle.
+  // Normally the renderer's dtor (render thread, GL current) frees the render
+  // context first. If it hasn't run yet, take ownership here so the handle is
+  // never destroyed while a live render context still references it — mpv
+  // requires mpv_render_context_free() strictly before mpv_terminate_destroy().
+  if (mpv_render_context *gl = m_mpvGl.exchange(nullptr)) {
+    mpv_render_context_set_update_callback(gl, nullptr, nullptr);
+    mpv_render_context_free(gl);
+  }
   if (m_mpv) {
+    mpv_set_wakeup_callback(m_mpv, nullptr, nullptr);
     mpv_terminate_destroy(m_mpv);
     m_mpv = nullptr;
   }

@@ -206,9 +206,17 @@
   }
 
   // ── Debounced search ──────────────────────────────────────────────────────────
+  // Sequence-token guard (same idea as App.svelte's quickPlayToken): the
+  // debounce timer only prevents overlapping *timers*, not overlapping
+  // *fetches* — once a timer fires, its awaited request keeps running even
+  // if a newer keystroke starts another one. Without this, a slower older
+  // response can land after and overwrite a faster newer one.
+  let searchSeq = 0;
+
   $effect(() => {
     const q = query.trim();
     const timeout = setTimeout(async () => {
+      const seq = ++searchSeq;
       if (!q) {
         data = empty();
         keywords = [];
@@ -221,6 +229,8 @@
         api.searchMulti(q).catch(() => empty()),
         api.getKeywords(q).catch(() => []),
       ]);
+      // Superseded by a newer search while this one was in flight — discard.
+      if (seq !== searchSeq) return;
       // Guard against null sections (e.g. an empty array serialized as null).
       data = {
         movies: res.movies ?? [],

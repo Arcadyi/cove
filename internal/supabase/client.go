@@ -29,17 +29,19 @@ import (
 )
 
 // Config holds the Supabase project credentials, loaded from env vars.
+// Deliberately no service-role key: it would bypass Row-Level Security and
+// ship inside a user-distributed binary, where anyone can extract it. All
+// PostgREST access goes through the anon key plus the calling user's own JWT,
+// so the database's RLS policies are the authorization boundary.
 type Config struct {
-	URL        string // https://xxx.supabase.co
-	AnonKey    string // publishable / anon key (SUPABASE_PUBLISHABLE_KEY)
-	ServiceKey string // service role secret key (SUPABASE_SERVICE_KEY)
-	JWTSecret  string // from Supabase → Settings → API → JWT Secret
+	URL     string // https://xxx.supabase.co
+	AnonKey string // publishable / anon key (SUPABASE_PUBLISHABLE_KEY)
 }
 
 // ConfigFromEnv reads Supabase credentials from environment variables, falling
 // back to the compiled-in defaults when an env var is absent. Returns nil if
 // the project URL is not set by either source (i.e. Supabase not configured).
-func ConfigFromEnv(defaultURL, defaultAnonKey, defaultServiceKey, defaultJWTSecret string) *Config {
+func ConfigFromEnv(defaultURL, defaultAnonKey string) *Config {
 	pick := func(envKey, dflt string) string {
 		if v := os.Getenv(envKey); v != "" {
 			return v
@@ -51,12 +53,14 @@ func ConfigFromEnv(defaultURL, defaultAnonKey, defaultServiceKey, defaultJWTSecr
 		return nil
 	}
 	return &Config{
-		URL:        strings.TrimRight(url, "/"),
-		AnonKey:    pick("SUPABASE_PUBLISHABLE_KEY", defaultAnonKey),
-		ServiceKey: pick("SUPABASE_SERVICE_KEY", defaultServiceKey),
-		JWTSecret:  pick("SUPABASE_JWT_SECRET", defaultJWTSecret),
+		URL:     strings.TrimRight(url, "/"),
+		AnonKey: pick("SUPABASE_PUBLISHABLE_KEY", defaultAnonKey),
 	}
 }
+
+// httpClient bounds every Supabase call — auth, JWKS, and PostgREST — so a
+// hung upstream can't pin request goroutines indefinitely.
+var httpClient = &http.Client{Timeout: 30 * time.Second}
 
 // jwksCache caches the ECDSA public keys fetched from Supabase's JWKS endpoint.
 var (
@@ -65,17 +69,19 @@ var (
 	jwksFetched time.Time
 )
 
-// fetchJWKS retrieves and caches EC public keys from the Supabase JWKS endpoint.
-func (c *Config) fetchJWKS() (map[string]*ecdsa.PublicKey, error) {
+// fetchJWKS retrieves and caches EC public keys from the Supabase JWKS
+// endpoint. force bypasses the cache TTL — used when a token's kid isn't in
+// the cached set, which is what key rotation looks like from here.
+func (c *Config) fetchJWKS(force bool) (map[string]*ecdsa.PublicKey, error) {
 	jwksMu.RLock()
-	if time.Since(jwksFetched) < 5*time.Minute && jwksKeys != nil {
+	if !force && time.Since(jwksFetched) < 5*time.Minute && jwksKeys != nil {
 		keys := jwksKeys
 		jwksMu.RUnlock()
 		return keys, nil
 	}
 	jwksMu.RUnlock()
 
-	resp, err := http.Get(c.URL + "/auth/v1/.well-known/jwks.json")
+	resp, err := httpClient.Get(c.URL + "/auth/v1/.well-known/jwks.json")
 	if err != nil {
 		return nil, fmt.Errorf("fetch jwks: %w", err)
 	}
@@ -118,15 +124,15 @@ func (c *Config) fetchJWKS() (map[string]*ecdsa.PublicKey, error) {
 	return keys, nil
 }
 
-// ValidateJWT parses the Bearer token and returns the Supabase user ID (sub claim).
-// Supports both HS256 (legacy) and ES256 (current Supabase default) signed tokens.
+// ValidateJWT parses the Bearer token and returns the Supabase user ID (sub
+// claim). Only ES256 via the project's JWKS is accepted (the Supabase
+// default); the legacy shared-secret HS256 path is gone with the secret
+// itself — a symmetric secret must never live in a distributed binary.
 func (c *Config) ValidateJWT(tokenString string) (userID string, err error) {
 	tok, err := jwt.Parse(tokenString, func(t *jwt.Token) (any, error) {
 		switch t.Method.(type) {
-		case *jwt.SigningMethodHMAC:
-			return []byte(c.JWTSecret), nil
 		case *jwt.SigningMethodECDSA:
-			keys, err := c.fetchJWKS()
+			keys, err := c.fetchJWKS(false)
 			if err != nil {
 				return nil, err
 			}
@@ -134,8 +140,13 @@ func (c *Config) ValidateJWT(tokenString string) (userID string, err error) {
 			if key, ok := keys[kid]; ok {
 				return key, nil
 			}
-			// No kid match — try any available EC key.
-			for _, key := range keys {
+			// Unknown kid: the signing key may have rotated since the cache
+			// was filled — refresh once and require an exact match.
+			keys, err = c.fetchJWKS(true)
+			if err != nil {
+				return nil, err
+			}
+			if key, ok := keys[kid]; ok {
 				return key, nil
 			}
 			return nil, fmt.Errorf("no JWKS key found for kid %q", kid)
@@ -206,7 +217,7 @@ func (c *Config) authPost(path string, body any) (*authResponse, error) {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("apikey", c.AnonKey)
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -330,7 +341,13 @@ func (c *Config) VerifyOTP(email, token string) (userID, accessToken, refreshTok
 
 // ── PostgREST helpers ─────────────────────────────────────────────────────────
 
-func (c *Config) restReq(method, table string, query string, body any) ([]byte, error) {
+// restReq performs a PostgREST call authenticated as the calling user: the
+// anon key identifies the project, userJWT carries the user's identity, and
+// Supabase's Row-Level Security policies decide what the user may touch.
+func (c *Config) restReq(userJWT, method, table string, query string, body any) ([]byte, error) {
+	if userJWT == "" {
+		return nil, fmt.Errorf("supabase REST %s %s: no user token", method, table)
+	}
 	var bodyReader io.Reader
 	if body != nil {
 		raw, err := json.Marshal(body)
@@ -348,14 +365,14 @@ func (c *Config) restReq(method, table string, query string, body any) ([]byte, 
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("apikey", c.ServiceKey)
-	req.Header.Set("Authorization", "Bearer "+c.ServiceKey)
+	req.Header.Set("apikey", c.AnonKey)
+	req.Header.Set("Authorization", "Bearer "+userJWT)
 	req.Header.Set("Prefer", "return=representation")
 	if method == http.MethodPost || method == http.MethodPatch {
 		req.Header.Set("Prefer", "resolution=merge-duplicates,return=representation")
 	}
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -368,15 +385,15 @@ func (c *Config) restReq(method, table string, query string, body any) ([]byte, 
 	return data, nil
 }
 
-// Upsert inserts or updates rows in a table using the service key.
-func (c *Config) Upsert(table string, rows any) error {
-	_, err := c.restReq(http.MethodPost, table, "", rows)
+// Upsert inserts or updates rows in a table as the given user.
+func (c *Config) Upsert(userJWT, table string, rows any) error {
+	_, err := c.restReq(userJWT, http.MethodPost, table, "", rows)
 	return err
 }
 
 // Select returns rows from a table matching the given PostgREST query string.
-func (c *Config) Select(table, query string) ([]json.RawMessage, error) {
-	data, err := c.restReq(http.MethodGet, table, query, nil)
+func (c *Config) Select(userJWT, table, query string) ([]json.RawMessage, error) {
+	data, err := c.restReq(userJWT, http.MethodGet, table, query, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -388,7 +405,7 @@ func (c *Config) Select(table, query string) ([]json.RawMessage, error) {
 }
 
 // Delete removes rows matching query from a table.
-func (c *Config) Delete(table, query string) error {
-	_, err := c.restReq(http.MethodDelete, table, query, nil)
+func (c *Config) Delete(userJWT, table, query string) error {
+	_, err := c.restReq(userJWT, http.MethodDelete, table, query, nil)
 	return err
 }

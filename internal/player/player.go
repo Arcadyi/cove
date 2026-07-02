@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -43,11 +44,12 @@ type Player struct {
 	addonMgr   *addons.Manager
 	nuvioMgr   *nuvio.Manager
 
-	// streamHeaders remembers the extra HTTP headers (Referer/Origin, etc.)
-	// a Nuvio-scraped stream's origin CDN requires, keyed by stream URL, so
-	// /api/play can proxy with them instead of a bare redirect that would
-	// drop them. Entries expire after streamHeadersTTL — they only need to
-	// live from "streams were listed" to "user pressed play".
+	// streamHeaders remembers every stream URL the backend itself returned
+	// from /api/streams (keyed by URL), together with any extra HTTP headers
+	// (Referer/Origin, etc.) the origin CDN requires. /api/play only accepts
+	// URLs found here — anything else is an open-redirect/SSRF attempt, not a
+	// stream we offered. Entries expire after streamHeadersTTL, refreshed on
+	// every lookup so long playback sessions stay valid.
 	streamHeadersMu sync.Mutex
 	streamHeaders   map[string]streamHeaderEntry
 }
@@ -99,13 +101,13 @@ func New(tmdbClient *tmdb.Client, addonMgr *addons.Manager, nuvioMgr *nuvio.Mana
 	}, nil
 }
 
-// rememberHeaders records the extra headers a stream URL needs for playback,
-// so /api/play can find them later by URL alone (the query string it
-// receives has no room for a headers map). Sweeps expired entries on every
-// call instead of running a background goroutine, since inserts are rare
-// enough (one per Nuvio-sourced stream returned) that this stays cheap.
-func (p *Player) rememberHeaders(streamURL string, headers map[string]string) {
-	if len(headers) == 0 {
+// rememberStream records a stream URL the backend returned to the client
+// (with any extra headers its origin requires — nil for most), authorizing
+// it for later /api/play use. Sweeps expired entries on every call instead
+// of running a background goroutine, since inserts only happen when streams
+// are listed and that stays cheap.
+func (p *Player) rememberStream(streamURL string, headers map[string]string) {
+	if streamURL == "" {
 		return
 	}
 	p.streamHeadersMu.Lock()
@@ -119,14 +121,19 @@ func (p *Player) rememberHeaders(streamURL string, headers map[string]string) {
 	p.streamHeaders[streamURL] = streamHeaderEntry{headers: headers, expires: now.Add(streamHeadersTTL)}
 }
 
-func (p *Player) lookupHeaders(streamURL string) map[string]string {
+// lookupStream reports whether streamURL is one the backend itself offered,
+// returning its remembered headers (usually nil). A hit refreshes the entry's
+// TTL so mpv's follow-up Range requests during a long watch never expire it.
+func (p *Player) lookupStream(streamURL string) (headers map[string]string, known bool) {
 	p.streamHeadersMu.Lock()
 	defer p.streamHeadersMu.Unlock()
 	entry, ok := p.streamHeaders[streamURL]
 	if !ok || time.Now().After(entry.expires) {
-		return nil
+		return nil, false
 	}
-	return entry.headers
+	entry.expires = time.Now().Add(streamHeadersTTL)
+	p.streamHeaders[streamURL] = entry
+	return entry.headers, true
 }
 
 // proxyStream forwards the request to streamURL with extra headers attached,
@@ -150,6 +157,20 @@ func (p *Player) proxyStream(streamURL string, headers map[string]string, w http
 			for k, v := range headers {
 				req.Header.Set(k, v)
 			}
+		},
+		// Bound connection setup but never the transfer itself — a stream
+		// runs for the length of the film. FlushInterval -1 disables output
+		// buffering so playback data reaches mpv as it arrives.
+		Transport: &http.Transport{
+			Proxy:                 http.ProxyFromEnvironment,
+			DialContext:           (&net.Dialer{Timeout: 15 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
+			TLSHandshakeTimeout:   15 * time.Second,
+			ResponseHeaderTimeout: 30 * time.Second,
+		},
+		FlushInterval: -1,
+		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
+			log.Println("stream proxy:", err)
+			w.WriteHeader(http.StatusBadGateway)
 		},
 	}
 	proxy.ServeHTTP(w, r)
@@ -215,10 +236,18 @@ func (p *Player) getLargestTorrentFile(infoHash string) (*torrent.File, error) {
 
 	now := time.Now()
 	p.activeTorrentsMu.Lock()
-	p.activeTorrents[infoHash] = &torrentState{
-		torrent:   t,
-		lastCheck: now,
-		lastUsed:  now,
+	// A concurrent first play of the same hash may have registered while we
+	// waited on GotInfo (AddMagnet dedupes to the same *Torrent). Keep the
+	// existing state — overwriting would discard its live reader count and
+	// let the reaper drop a torrent that's still being streamed.
+	if st, ok := p.activeTorrents[infoHash]; ok {
+		st.lastUsed = now
+	} else {
+		p.activeTorrents[infoHash] = &torrentState{
+			torrent:   t,
+			lastCheck: now,
+			lastUsed:  now,
+		}
 	}
 	p.activeTorrentsMu.Unlock()
 
@@ -451,10 +480,13 @@ func (p *Player) SetupHandlers(mux *http.ServeMux) {
 				year = parseYear(firstNonEmpty(media.Released, media.FirstAir))
 			}
 			nuvioStreams := p.nuvioMgr.GetStreams(mediaType, id, imdbID, title, year, seasonNum, episodeNum)
-			for _, s := range nuvioStreams {
-				p.rememberHeaders(s.URL, s.Headers)
-			}
 			streams = append(streams, nuvioStreams...)
+		}
+
+		// Register every direct-URL stream we're about to offer — /api/play
+		// only accepts URLs from this registry (see rememberStream).
+		for _, s := range streams {
+			p.rememberStream(s.URL, s.Headers)
 		}
 
 		err = json.NewEncoder(w).Encode(streams)
@@ -470,9 +502,21 @@ func (p *Player) SetupHandlers(mux *http.ServeMux) {
 
 		// Direct http(s) sources: redirect mpv straight to them, unless the
 		// origin needs extra headers (e.g. Referer) that a redirect can't
-		// carry — in that case proxy the request instead.
+		// carry — in that case proxy the request instead. Only URLs this
+		// backend itself returned from /api/streams are accepted; anything
+		// else would make this an open redirect / request proxy.
 		if streamURL != "" {
-			if headers := p.lookupHeaders(streamURL); headers != nil {
+			if u, err := url.Parse(streamURL); err != nil ||
+				(u.Scheme != "http" && u.Scheme != "https") {
+				http.Error(w, "invalid stream url", http.StatusBadRequest)
+				return
+			}
+			headers, known := p.lookupStream(streamURL)
+			if !known {
+				http.Error(w, "unknown stream url (list streams first)", http.StatusForbidden)
+				return
+			}
+			if len(headers) > 0 {
 				p.proxyStream(streamURL, headers, w, r)
 				return
 			}
@@ -504,7 +548,6 @@ func (p *Player) SetupHandlers(mux *http.ServeMux) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.Header().Set("Cache-Control", "no-cache")
 		w.Header().Set("Connection", "keep-alive")
-		w.Header().Set("Access-Control-Allow-Origin", "*")
 
 		flusher, ok := w.(http.Flusher)
 		if !ok {
@@ -560,7 +603,18 @@ func (p *Player) SetupHandlers(mux *http.ServeMux) {
 			http.Error(w, "missing url", http.StatusBadRequest)
 			return
 		}
-		resp, err := http.Get(rawURL)
+		// Subtitle URLs come from third-party addons; only plain http(s) to
+		// public hosts is allowed (SafeHTTPClient refuses local/private IPs).
+		if _, err := utils.ValidatePublicURL(rawURL); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, rawURL, nil)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		resp, err := utils.SafeHTTPClient.Do(req)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadGateway)
 			return
@@ -572,14 +626,14 @@ func (p *Player) SetupHandlers(mux *http.ServeMux) {
 			}
 		}(resp.Body)
 
-		body, err := io.ReadAll(resp.Body)
+		// 10 MiB is far beyond any real subtitle file.
+		body, err := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 
 		w.Header().Set("Content-Type", "text/vtt; charset=utf-8")
-		w.Header().Set("Access-Control-Allow-Origin", "*")
 
 		// If it's SRT, convert to WebVTT (browser only accepts VTT for <track>)
 		content := string(body)

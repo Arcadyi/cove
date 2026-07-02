@@ -67,6 +67,21 @@ function releaseSlot(): void {
   else inFlight--;
 }
 
+// Every fetch through the limiter gets a hard 20s ceiling — otherwise a
+// stalled request (dead addon, unreachable torrent tracker, etc.) never
+// releases its slot, and with only MAX_CONCURRENT slots, 8 stalled fetches
+// deadlock the entire pool for every other caller. Combined with any signal
+// the caller already passed so both can still abort the request.
+const FETCH_TIMEOUT_MS = 20_000;
+
+function withTimeout(init?: RequestInit): RequestInit {
+  const timeoutSignal = AbortSignal.timeout(FETCH_TIMEOUT_MS);
+  const signal = init?.signal
+    ? AbortSignal.any([init.signal, timeoutSignal])
+    : timeoutSignal;
+  return { ...init, signal };
+}
+
 /** fetch(), but never more than MAX_CONCURRENT calls outstanding at once. */
 async function limitedFetch(
   input: RequestInfo | URL,
@@ -74,7 +89,7 @@ async function limitedFetch(
 ): Promise<Response> {
   await acquireSlot();
   try {
-    return await fetch(input, init);
+    return await fetch(input, withTimeout(init));
   } finally {
     releaseSlot();
   }
@@ -371,6 +386,16 @@ export const api = {
 
   subtitleProxyUrl: (externalUrl: string): string =>
     `${BASE}/subtitle-proxy?url=${encodeURIComponent(externalUrl)}`,
+
+  /**
+   * Direct-URL stream routed through the backend proxy. Needed when the
+   * origin requires extra headers (Referer/Origin) that mpv wouldn't send —
+   * the backend remembered them when it listed the stream and re-attaches
+   * them. Only URLs the backend itself returned from /api/streams are
+   * accepted.
+   */
+  playProxyUrl: (streamUrl: string): string =>
+    `${BASE}/play?url=${encodeURIComponent(streamUrl)}`,
 
   progressStreamUrl: (src: string): string =>
     `${BASE}/progress/stream?hash=${src}`,
@@ -770,7 +795,9 @@ export const api = {
   authMe: (): Promise<{ profile: Profile; linked: boolean }> =>
     request(`/auth/me`),
 
-  authSync: (): Promise<{ status: string }> =>
+  // library_generation is absent on older backends / a noop (non-proprietary)
+  // build that 503s — callers fall back accordingly.
+  authSync: (): Promise<{ status: string; library_generation?: number }> =>
     request(`/auth/sync`, { method: "POST" }),
 
   // Persistent client session — stored by the Go backend as a JSON file in

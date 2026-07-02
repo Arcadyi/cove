@@ -5,6 +5,8 @@
 #include <QTimer>
 #include <QVariant>
 
+#include <atomic>
+
 #include <mpv/client.h>
 #include <mpv/render_gl.h>
 
@@ -14,9 +16,16 @@ class MpvObject : public QQuickFramebufferObject {
   Q_OBJECT
   friend class MpvRenderer;
 
+  // False when libmpv failed to create/initialize (broken GL/mpv stack). The
+  // shell keeps running — every slot below no-ops — and the web UI reads this
+  // through the bridge to show its "player unavailable" state.
+  Q_PROPERTY(bool valid READ valid CONSTANT)
+
 public:
   explicit MpvObject(QQuickItem *parent = nullptr);
   ~MpvObject() override;
+
+  bool valid() const { return m_mpv != nullptr; }
 
   Renderer *createRenderer() const override;
 
@@ -79,7 +88,10 @@ private:
   QVariantList readTrackList();
 
   mpv_handle *m_mpv = nullptr;
-  mpv_render_context *m_mpvGl = nullptr;
+  // Shared between the GUI thread (dtor) and the Quick render thread
+  // (create/render/renderer-dtor). Freed by whichever teardown path gets
+  // there first via exchange(nullptr), so it can't be double-freed.
+  std::atomic<mpv_render_context *> m_mpvGl{nullptr};
   bool m_renderReady = false;
   QString m_pendingUrl;
   QTimer *m_pollTimer = nullptr;

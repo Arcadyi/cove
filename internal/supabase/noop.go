@@ -20,7 +20,7 @@ import (
 type Config struct{}
 
 // ConfigFromEnv always returns nil when built without -tags supabase.
-func ConfigFromEnv(url, anonKey, serviceKey, jwtSecret string) *Config { return nil }
+func ConfigFromEnv(url, anonKey string) *Config { return nil }
 
 // Server is a no-op auth server.
 type Server struct{}

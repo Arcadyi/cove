@@ -18,6 +18,7 @@
   import { Film, Tv } from "lucide-svelte";
   import type { Media } from "$lib/types/tmdb";
   import { Badge } from "$lib/components/ui/badge/index.js";
+  import { mediaFromEntry } from "$lib/mediaFromEntry";
 
   let {
     item,
@@ -25,14 +26,12 @@
   }: { item: ComingSoonItem; onSelectMedia: (m: Media) => void } = $props();
 
   function toMedia(it: ComingSoonItem): Media {
-    return {
+    return mediaFromEntry({
       id: it.tmdbId,
       media_type: it.mediaType,
       ...(it.mediaType === "movie" ? { title: it.title } : { name: it.title }),
       poster_path: it.posterPath,
-      overview: "",
-      vote_average: 0,
-    } as unknown as Media;
+    });
   }
 
   function formatDate(dateStr: string): string {

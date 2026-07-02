@@ -605,6 +605,8 @@
                     <img
                       src={entry.poster_path}
                       alt={entry.title}
+                      loading="lazy"
+                      decoding="async"
                       class="aspect-2/3 w-full rounded-md object-cover opacity-60"
                     />
                   {/if}

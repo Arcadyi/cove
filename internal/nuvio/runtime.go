@@ -12,9 +12,11 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/andybalholm/brotli"
+	"github.com/coveninja/cove/internal/utils"
 	"github.com/dop251/goja"
 	"github.com/dop251/goja_nodejs/console"
 	"github.com/dop251/goja_nodejs/eventloop"
@@ -56,6 +58,16 @@ const invocationTimeout = 15 * time.Second
 // logs from a scraper that's just slow across many small requests.
 const httpTimeout = 10 * time.Second
 
+// maxFetchBody caps how much a scraper's fetch() will read, both raw and
+// after decompression (a compressed body can inflate far past the raw cap).
+// Scrapers fetch search pages and JSON APIs — 20 MiB is already generous.
+const maxFetchBody = 20 << 20
+
+// scraperTransport builds the HTTP transport backing scraper fetch(). In
+// production it's the SSRF-safe transport, which refuses loopback/private
+// addresses; tests that need to hit a local httptest server override it.
+var scraperTransport = utils.SafeTransport
+
 // runScraper executes one scraper's code against the given media info and
 // returns whatever streams it produced. It never panics the caller: script
 // errors, timeouts, and malformed output are all returned as an error.
@@ -76,9 +88,15 @@ func runScraper(parent context.Context, scraperID, code string, timeout time.Dur
 	}
 	done := make(chan result, 1)
 	finished := make(chan struct{}) // closed once, right before the one send to done
+	// sync.Once guards against a hostile scraper resolving twice — e.g. a
+	// custom thenable whose then() invokes both callbacks. Without it the
+	// second call would close(finished) twice and panic the process.
+	var sendOnce sync.Once
 	send := func(r result) {
-		done <- r
-		close(finished)
+		sendOnce.Do(func() {
+			done <- r
+			close(finished)
+		})
 	}
 
 	// goja.Runtime.Interrupt is explicitly safe (and intended) to call from a
@@ -255,7 +273,9 @@ func stringField(m map[string]interface{}, key string) string {
 // stdlib beyond what's shimmed here, which is the whole of this package's
 // sandboxing story.
 func bindGlobals(ctx context.Context, loop *eventloop.EventLoop, vm *goja.Runtime, scraperID string) {
-	client := &http.Client{Timeout: httpTimeout}
+	// The transport refuses loopback/private/link-local addresses so scraper
+	// JS can't use fetch() to reach the local API or the user's LAN.
+	client := &http.Client{Transport: scraperTransport(), Timeout: httpTimeout}
 	bindFetch(ctx, loop, vm, client)
 	bindWebGlobals(vm)
 
@@ -311,6 +331,11 @@ func bindFetch(ctx context.Context, loop *eventloop.EventLoop, vm *goja.Runtime,
 
 		promise, resolve, reject := vm.NewPromise()
 
+		if _, err := utils.ValidatePublicURL(url); err != nil {
+			reject(newJSError(vm, err.Error()))
+			return vm.ToValue(promise)
+		}
+
 		go func() {
 			var reqBody io.Reader
 			if body != "" {
@@ -365,7 +390,7 @@ func bindFetch(ctx context.Context, loop *eventloop.EventLoop, vm *goja.Runtime,
 // (still-compressed) bytes — that previously surfaced as a confusing
 // JSON.parse "unexpected character" error instead of the actual problem.
 func decodeBody(resp *http.Response) ([]byte, error) {
-	raw, err := io.ReadAll(resp.Body)
+	raw, err := readCapped(resp.Body)
 	if err != nil {
 		return nil, err
 	}
@@ -378,9 +403,9 @@ func decodeBody(resp *http.Response) ([]byte, error) {
 			return nil, fmt.Errorf("gzip decode: %w", err)
 		}
 		defer gz.Close()
-		return io.ReadAll(gz)
+		return readCapped(gz)
 	case "br":
-		data, err := io.ReadAll(brotli.NewReader(bytes.NewReader(raw)))
+		data, err := readCapped(brotli.NewReader(bytes.NewReader(raw)))
 		if err != nil {
 			return nil, fmt.Errorf("brotli decode: %w", err)
 		}
@@ -388,13 +413,13 @@ func decodeBody(resp *http.Response) ([]byte, error) {
 	case "deflate":
 		if zr, zerr := zlib.NewReader(bytes.NewReader(raw)); zerr == nil {
 			defer zr.Close()
-			if data, err := io.ReadAll(zr); err == nil {
+			if data, err := readCapped(zr); err == nil {
 				return data, nil
 			}
 		}
 		fr := flate.NewReader(bytes.NewReader(raw))
 		defer fr.Close()
-		data, err := io.ReadAll(fr)
+		data, err := readCapped(fr)
 		if err != nil {
 			return nil, fmt.Errorf("deflate decode: %w", err)
 		}
@@ -402,6 +427,20 @@ func decodeBody(resp *http.Response) ([]byte, error) {
 	default:
 		return raw, nil
 	}
+}
+
+// readCapped reads at most maxFetchBody bytes and errors (rather than
+// silently truncating) when the source exceeds the cap — a truncated page
+// would surface later as a baffling parse error inside the scraper.
+func readCapped(r io.Reader) ([]byte, error) {
+	data, err := io.ReadAll(io.LimitReader(r, maxFetchBody+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > maxFetchBody {
+		return nil, fmt.Errorf("response exceeds %d byte limit", maxFetchBody)
+	}
+	return data, nil
 }
 
 func newFetchResponse(vm *goja.Runtime, resp *http.Response, data []byte) *goja.Object {

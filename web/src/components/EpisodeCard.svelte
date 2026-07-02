@@ -90,6 +90,8 @@
           <img
             src={ep.still_path}
             alt={ep.name}
+            loading="lazy"
+            decoding="async"
             class="aspect-video w-full object-cover {hideSpoilers
               ? 'scale-110 blur-md'
               : ''}"

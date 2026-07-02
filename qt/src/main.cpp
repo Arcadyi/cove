@@ -15,6 +15,8 @@
 #include <QFileInfo>
 #include <QGuiApplication>
 #include <QHostAddress>
+#include <QIcon>
+#include <QLockFile>
 #include <QMimeDatabase>
 #include <QProcess>
 #include <QQmlApplicationEngine>
@@ -36,6 +38,11 @@
 
 #ifdef Q_OS_WIN
 #include <windows.h>
+#endif
+
+#ifdef Q_OS_LINUX
+#include <csignal>
+#include <sys/prctl.h>
 #endif
 
 #include "MpvObject.h"
@@ -190,6 +197,28 @@ private:
 };
 
 // ── Backend (Go sidecar) ─────────────────────────────────────────────────────
+// The aboutToQuit handler in main() covers clean shutdowns, but a crashed or
+// SIGKILLed shell never reaches it, leaving an orphan backend holding :6969
+// (which then makes the next launch fail its port bind). Tie the child's
+// lifetime to ours at the OS level: PDEATHSIG on Linux, a kill-on-close Job
+// Object on Windows.
+
+#ifdef Q_OS_WIN
+static HANDLE backendJob() {
+  static HANDLE job = [] {
+    HANDLE h = CreateJobObjectW(nullptr, nullptr);
+    if (h) {
+      JOBOBJECT_EXTENDED_LIMIT_INFORMATION info{};
+      info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+      SetInformationJobObject(h, JobObjectExtendedLimitInformation, &info,
+                              sizeof(info));
+    }
+    return h;
+  }();
+  return job;
+}
+#endif
+
 static QProcess *startBackend(const QString &exePath, QObject *parent) {
   auto *proc = new QProcess(parent);
   proc->setProcessChannelMode(QProcess::MergedChannels);
@@ -198,7 +227,21 @@ static QProcess *startBackend(const QString &exePath, QObject *parent) {
     for (const QString &line : out.split('\n', Qt::SkipEmptyParts))
       qInfo().noquote() << "[go]" << line;
   });
+#ifdef Q_OS_LINUX
+  proc->setChildProcessModifier(
+      [] { prctl(PR_SET_PDEATHSIG, SIGTERM); });
+#endif
   proc->start(exePath, {});
+#ifdef Q_OS_WIN
+  if (HANDLE job = backendJob(); job && proc->processId() != 0) {
+    HANDLE child = OpenProcess(PROCESS_SET_QUOTA | PROCESS_TERMINATE, FALSE,
+                               static_cast<DWORD>(proc->processId()));
+    if (child) {
+      AssignProcessToJobObject(job, child);
+      CloseHandle(child);
+    }
+  }
+#endif
   return proc;
 }
 
@@ -344,8 +387,20 @@ int main(int argc, char *argv[]) {
   QGuiApplication app(argc, argv);
   app.setApplicationName("cove");
   app.setOrganizationName("coveninja");
+  app.setWindowIcon(QIcon(QStringLiteral(":/cove.png")));
 
   openLogFile();
+
+  // Single-instance guard. QLockFile detects stale locks from crashed
+  // processes (it records the holder's PID), so a crash never wedges future
+  // launches the way the old "did port 5174 bind?" heuristic could.
+  QLockFile instanceLock(QDir::temp().filePath("cove_shell.lock"));
+  if (!instanceLock.tryLock(0)) {
+    reportStartupFailure(
+        QStringLiteral("Cove is already running (another instance holds the "
+                       "instance lock)."));
+    return 0;
+  }
 
   qmlRegisterType<MpvObject>("mpv", 1, 0, "MpvObject");
 
@@ -360,14 +415,12 @@ int main(int argc, char *argv[]) {
 #endif
   QCommandLineOption webrootOpt("webroot", "Path to the renderer build dir.",
                                 "path", "../../web/dist");
-  QCommandLineOption apiPortOpt("api-port", "Backend API port.", "port", "6969");
   QCommandLineOption playOpt(
       "play", "Compositing test: play this media file behind a test overlay.",
       "file");
   QCommandLineOption devOpt("dev", "Connect to the Vite development server for hot reload.");
   parser.addOption(backendOpt);
   parser.addOption(webrootOpt);
-  parser.addOption(apiPortOpt);
   parser.addOption(playOpt);
   parser.addOption(devOpt);
   parser.process(app);
@@ -375,7 +428,10 @@ int main(int argc, char *argv[]) {
   const QString backendPath =
       QFileInfo(parser.value(backendOpt)).absoluteFilePath();
   const QString webRoot = QFileInfo(parser.value(webrootOpt)).absoluteFilePath();
-  const quint16 apiPort = parser.value(apiPortOpt).toUShort();
+  // The API port is pinned across the stack (backend bind, web bundle's BASE
+  // URL, index.html CSP) — a configurable flag here would only pretend it can
+  // be changed.
+  constexpr quint16 apiPort = 6969;
     const QString testFile =
       parser.isSet(playOpt)
           ? QFileInfo(parser.value(playOpt)).absoluteFilePath()

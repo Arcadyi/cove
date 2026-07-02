@@ -142,6 +142,8 @@
     <img
       src={media.poster_path}
       alt={title}
+      loading="lazy"
+      decoding="async"
       class="aspect-video w-full object-cover"
     />
   {/if}

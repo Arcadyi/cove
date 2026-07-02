@@ -562,6 +562,8 @@
                     <img
                       src={item.poster_path}
                       alt={item.media_type === "tv" ? item.name : item.title}
+                      loading="lazy"
+                      decoding="async"
                       class="aspect-2/3 w-full object-cover transition-opacity hover:opacity-75"
                     />
                   </div>

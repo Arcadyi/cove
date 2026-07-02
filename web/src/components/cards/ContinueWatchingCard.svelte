@@ -54,6 +54,8 @@
       <img
         src={item.image}
         alt={item.title}
+        loading="lazy"
+        decoding="async"
         class="aspect-video w-full object-cover transition-transform duration-200 group-hover:scale-105"
       />
     {:else}

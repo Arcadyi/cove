@@ -398,6 +398,8 @@
                   <img
                     src={m.poster_path}
                     alt={title}
+                    loading="lazy"
+                    decoding="async"
                     class="aspect-2/3 w-full object-cover"
                   />
                 {:else}
@@ -436,6 +438,8 @@
                   <img
                     src={m.poster_path}
                     alt={title}
+                    loading="lazy"
+                    decoding="async"
                     class="h-12 w-8 shrink-0 rounded object-cover"
                   />
                 {:else}

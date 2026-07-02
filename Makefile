@@ -98,6 +98,7 @@ patch:
 	cd $(WEB_DIR) && npm version patch --no-git-tag-version
 	@NEW_VER=$$(node -p "require('./$(WEB_DIR)/package.json').version"); \
 	TITLE="$(if $(TITLE),$(TITLE),chore: bump version to v$$NEW_VER)"; \
+	sed -i "s|<release version=\"[^\"]*\" date=\"[^\"]*\"/>|<release version=\"$$NEW_VER\" date=\"$$(date +%Y-%m-%d)\"/>|" flatpak/io.github.coveninja.Cove.metainfo.xml && \
 	git add -A && \
 	if [ -n "$(MSG)" ]; then \
 		git commit -m "$$TITLE" -m "$(MSG)"; \

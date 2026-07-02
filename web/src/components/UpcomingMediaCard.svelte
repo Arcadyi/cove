@@ -7,6 +7,7 @@
   let { item, onSelectMedia } = $props();
   import { settings } from "$lib/stores/settings";
   import ScrambledText from "./ScrambledText.svelte";
+  import { mediaFromEntry } from "$lib/mediaFromEntry";
 
   function isToday(dateStr: string): boolean {
     const date = new Date(dateStr + "T00:00:00");
@@ -15,14 +16,12 @@
   }
 
   function toMedia(item: UpcomingItem): Media {
-    return {
+    return mediaFromEntry({
       id: item.tmdbId,
       media_type: "tv",
       name: item.title,
       poster_path: item.posterPath,
-      overview: "",
-      vote_average: 0,
-    } as unknown as Media;
+    });
   }
 
   function formatAirDate(dateStr: string): string {

@@ -75,3 +75,21 @@ func TestAssetName(t *testing.T) {
 		assert.True(t, strings.HasSuffix(name, ".tar.gz"))
 	}
 }
+
+func TestSecurePath(t *testing.T) {
+	dest := "/tmp/covedest"
+	ok := []string{"cove", "web/index.html", "./web/app.js"}
+	for _, name := range ok {
+		if _, err := securePath(dest, name); err != nil {
+			t.Errorf("securePath(%q) unexpectedly rejected: %v", name, err)
+		}
+	}
+	// A leading "/" is cleaned by filepath.Join into a path relative to dest,
+	// so "/abs/path" lands safely inside — only real ".." escapes are rejected.
+	bad := []string{"../evil", "../../etc/passwd", "web/../../escape"}
+	for _, name := range bad {
+		if _, err := securePath(dest, name); err == nil {
+			t.Errorf("securePath(%q) should have been rejected as escaping", name)
+		}
+	}
+}

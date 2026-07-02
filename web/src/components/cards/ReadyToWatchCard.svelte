@@ -22,23 +22,22 @@
   import { Badge } from "$lib/components/ui/badge/index.js";
   import { settings } from "$lib/stores/settings";
   import ScrambledText from "../ScrambledText.svelte";
+  import { mediaFromEntry } from "$lib/mediaFromEntry";
 
   let {
     item,
     onSelectMedia,
   }: { item: ReadyItem; onSelectMedia: (m: Media) => void } = $props();
 
-  // Partial Media stand-in — same approach as UpcomingMediaCard. The detail
-  // view it opens into re-fetches the full object, so a thin shell is enough.
+  // Partial Media stand-in — see $lib/mediaFromEntry for why this cast is
+  // safe (the detail view it opens into re-fetches the full object).
   function toMedia(it: ReadyItem): Media {
-    return {
+    return mediaFromEntry({
       id: it.tmdbId,
       media_type: "tv",
       name: it.title,
       poster_path: it.posterPath,
-      overview: "",
-      vote_average: 0,
-    } as unknown as Media;
+    });
   }
 
   function formatAired(dateStr: string): string {

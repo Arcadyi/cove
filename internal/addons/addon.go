@@ -185,8 +185,7 @@ func (m *Manager) FetchSubtitles(addonURL string, mediaType string, id string) (
 	return data.Subtitles, nil
 }
 
-func (m *Manager) SetupHandlers(mux *http.ServeMux, imdbLookup func(tmdbID int) string) {
-	m.imdbLookup = imdbLookup
+func (m *Manager) SetupHandlers(mux *http.ServeMux) {
 	// GET  /api/addons          — list all addons
 	// POST /api/addons          — add stremio addon (body: {"url":"..."})
 	// PATCH /api/addons?id=X   — toggle enabled (body: {"enabled":true})

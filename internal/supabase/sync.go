@@ -28,7 +28,7 @@ type remoteProfile struct {
 }
 
 // EnsureProfile upserts the profile row in Supabase, creating it if absent.
-func (c *Config) EnsureProfile(localProfileID, supabaseUID, name string, isPrimary bool) error {
+func (c *Config) EnsureProfile(userJWT, localProfileID, supabaseUID, name string, isPrimary bool) error {
 	row := map[string]any{
 		"id":         localProfileID,
 		"user_id":    supabaseUID,
@@ -36,13 +36,13 @@ func (c *Config) EnsureProfile(localProfileID, supabaseUID, name string, isPrima
 		"is_primary": isPrimary,
 		"updated_at": time.Now().UTC(),
 	}
-	return c.Upsert("profiles", []any{row})
+	return c.Upsert(userJWT, "profiles", []any{row})
 }
 
 // RemoteProfilesForUser returns all profile rows owned by the given Supabase user.
-func (c *Config) RemoteProfilesForUser(supabaseUID string) ([]remoteProfile, error) {
+func (c *Config) RemoteProfilesForUser(userJWT, supabaseUID string) ([]remoteProfile, error) {
 	q := "user_id=eq." + url.QueryEscape(supabaseUID)
-	rows, err := c.Select("profiles", q)
+	rows, err := c.Select(userJWT, "profiles", q)
 	if err != nil {
 		return nil, err
 	}
@@ -59,7 +59,7 @@ func (c *Config) RemoteProfilesForUser(supabaseUID string) ([]remoteProfile, err
 
 // PushLibrary uploads all local library entries, progress records, and dismissals
 // for a profile to Supabase. Existing remote rows are merged (last-write-wins).
-func (c *Config) PushLibrary(profileID string, lib *library.Library) error {
+func (c *Config) PushLibrary(userJWT, profileID string, lib *library.Library) error {
 	entries := lib.AllEntries()
 	if len(entries) > 0 {
 		rows := make([]map[string]any, 0, len(entries))
@@ -68,7 +68,7 @@ func (c *Config) PushLibrary(profileID string, lib *library.Library) error {
 			e.ProfileID = &pid
 			rows = append(rows, entryToMap(e))
 		}
-		if err := c.Upsert("library_entries", rows); err != nil {
+		if err := c.Upsert(userJWT, "library_entries", rows); err != nil {
 			return fmt.Errorf("push library entries: %w", err)
 		}
 	}
@@ -81,7 +81,7 @@ func (c *Config) PushLibrary(profileID string, lib *library.Library) error {
 			p.ProfileID = &pid
 			rows = append(rows, progressToMap(p))
 		}
-		if err := c.Upsert("watch_progress", rows); err != nil {
+		if err := c.Upsert(userJWT, "watch_progress", rows); err != nil {
 			return fmt.Errorf("push watch progress: %w", err)
 		}
 	}
@@ -97,7 +97,7 @@ func (c *Config) PushLibrary(profileID string, lib *library.Library) error {
 				"dismissed_at": d.DismissedAt,
 			})
 		}
-		if err := c.Upsert("dismissals", rows); err != nil {
+		if err := c.Upsert(userJWT, "dismissals", rows); err != nil {
 			return fmt.Errorf("push dismissals: %w", err)
 		}
 	}
@@ -105,12 +105,12 @@ func (c *Config) PushLibrary(profileID string, lib *library.Library) error {
 }
 
 // PushSettings uploads current settings for the profile.
-func (c *Config) PushSettings(profileID string, st *settings.Store) error {
+func (c *Config) PushSettings(userJWT, profileID string, st *settings.Store) error {
 	data, err := json.Marshal(st.Get())
 	if err != nil {
 		return err
 	}
-	return c.Upsert("profile_settings", []any{map[string]any{
+	return c.Upsert(userJWT, "profile_settings", []any{map[string]any{
 		"profile_id": profileID,
 		"data":       json.RawMessage(data),
 		"updated_at": time.Now().UTC(),
@@ -121,13 +121,13 @@ func (c *Config) PushSettings(profileID string, st *settings.Store) error {
 // PushAddons syncs Stremio-addon config cross-device. Nuvio repo/scraper
 // config (internal/nuvio) is a conscious, documented gap for this iteration —
 // it is not covered by cross-device sync yet.
-func (c *Config) PushAddons(profileID string, mgr *addons.Manager) error {
+func (c *Config) PushAddons(userJWT, profileID string, mgr *addons.Manager) error {
 	entries := mgr.GetEntries()
 	data, err := json.Marshal(entries)
 	if err != nil {
 		return err
 	}
-	return c.Upsert("profile_addons", []any{map[string]any{
+	return c.Upsert(userJWT, "profile_addons", []any{map[string]any{
 		"profile_id": profileID,
 		"data":       json.RawMessage(data),
 		"updated_at": time.Now().UTC(),
@@ -143,12 +143,12 @@ type PulledData struct {
 }
 
 // PullAll downloads all Supabase data for the given profile.
-func (c *Config) PullAll(profileID string) (*PulledData, error) {
+func (c *Config) PullAll(userJWT, profileID string) (*PulledData, error) {
 	q := "profile_id=eq." + url.QueryEscape(profileID)
 	out := &PulledData{}
 
 	// Library entries
-	rows, err := c.Select("library_entries", q)
+	rows, err := c.Select(userJWT, "library_entries", q)
 	if err != nil {
 		return nil, fmt.Errorf("pull library_entries: %w", err)
 	}
@@ -162,7 +162,7 @@ func (c *Config) PullAll(profileID string) (*PulledData, error) {
 	}
 
 	// Watch progress
-	rows, err = c.Select("watch_progress", q)
+	rows, err = c.Select(userJWT, "watch_progress", q)
 	if err != nil {
 		return nil, fmt.Errorf("pull watch_progress: %w", err)
 	}
@@ -176,7 +176,7 @@ func (c *Config) PullAll(profileID string) (*PulledData, error) {
 	}
 
 	// Dismissals
-	rows, err = c.Select("dismissals", q)
+	rows, err = c.Select(userJWT, "dismissals", q)
 	if err != nil {
 		return nil, fmt.Errorf("pull dismissals: %w", err)
 	}
@@ -190,7 +190,7 @@ func (c *Config) PullAll(profileID string) (*PulledData, error) {
 	}
 
 	// Settings
-	settingsRows, err := c.Select("profile_settings", "profile_id=eq."+url.QueryEscape(profileID))
+	settingsRows, err := c.Select(userJWT, "profile_settings", "profile_id=eq."+url.QueryEscape(profileID))
 	if err == nil && len(settingsRows) > 0 {
 		var row struct {
 			Data json.RawMessage `json:"data"`

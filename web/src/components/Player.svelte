@@ -45,8 +45,6 @@
     episode?: number;
   } = $props();
 
-  settings.load().catch(() => {});
-
   // ─── Playback lifecycle ─────────────────────────────────────────────────────
 
   // mpv plays the backend stream URL directly — no probe, no HLS, no transcode.
@@ -195,9 +193,7 @@
     const m = media;
     if (!m) { timestamps = null; return; }
     timestamps = null;
-    console.log(`[introdb] fetching tmdbId=${m.id} season=${season} episode=${episode}`);
     api.getTimestamps(m.id, { season, episode }).then((data) => {
-      console.log("[introdb] response:", JSON.stringify(data));
       timestamps = data;
     }).catch((e) => {
       console.warn("[introdb] fetch failed:", e);
@@ -268,8 +264,8 @@
   // both timestamp data and a known duration. Returns null when unified bar is
   // needed (no data, or all segments collapsed to a single chapter).
   const chapterBars = $derived.by((): ChapterBar[] | null => {
-    if (!timestamps) { console.log("[introdb] chapterBars: no timestamps yet"); return null; }
-    if (!Player.duration) { console.log("[introdb] chapterBars: duration=0"); return null; }
+    if (!timestamps) return null;
+    if (!Player.duration) return null;
     const durMs = Player.duration * 1000;
 
     const named: { startMs: number; endMs: number; type: string }[] = [];
@@ -281,7 +277,7 @@
     addAll(timestamps.recap, "recap");
     addAll(timestamps.credits, "credits");
     addAll(timestamps.preview, "preview");
-    if (named.length === 0) { console.log("[introdb] chapterBars: timestamps present but all arrays empty"); return null; }
+    if (named.length === 0) return null;
 
     named.sort((a, b) => a.startMs - b.startMs);
 
@@ -299,9 +295,7 @@
     }
     if (pos < durMs) bars.push({ startFrac: pos / durMs, endFrac: 1, type: "content" });
 
-    const result = bars.length > 1 ? bars : null;
-    console.log("[introdb] chapterBars:", result ? `${result.length} chapters` : "null (single chapter)");
-    return result;
+    return bars.length > 1 ? bars : null;
   });
 
   function segmentBgClass(type: ChapterBar["type"]): string {

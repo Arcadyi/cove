@@ -172,8 +172,10 @@ func (l *Library) MergeFrom(entries []*LibraryEntry, progress []*WatchProgress, 
 			l.db.Dismissed[key] = d
 		}
 	}
+	if err := l.persist(); err != nil {
+		log.Println("library persist:", err)
+	}
 	l.mu.Unlock()
-	_ = l.persist()
 	l.gen.Add(1)
 }
 
@@ -437,11 +439,6 @@ func (l *Library) SetupHandlers(mux *http.ServeMux) {
 
 func (l *Library) handleCollection(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
-	case http.MethodOptions:
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
-		w.WriteHeader(http.StatusNoContent)
-
 	case http.MethodGet:
 		statusFilter := r.URL.Query().Get("status")
 		l.mu.RLock()
@@ -529,11 +526,6 @@ func (l *Library) handleCollection(w http.ResponseWriter, r *http.Request) {
 
 func (l *Library) handleProgress(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
-	case http.MethodOptions:
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
-		w.WriteHeader(http.StatusNoContent)
-
 	case http.MethodGet:
 		tmdbID, err := strconv.Atoi(r.URL.Query().Get("tmdb_id"))
 		if err != nil {
@@ -670,13 +662,6 @@ func (l *Library) handleProgress(w http.ResponseWriter, r *http.Request) {
 // PATCH  /api/library/{id}/{type}/rating  — update rating field (null to clear)
 
 func (l *Library) handleItem(w http.ResponseWriter, r *http.Request) {
-	if r.Method == http.MethodOptions {
-		w.Header().Set("Access-Control-Allow-Methods", "GET, DELETE, PATCH, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
-		w.WriteHeader(http.StatusNoContent)
-		return
-	}
-
 	// "/api/library/12345/movie" → trimmed = "12345/movie"
 	// "/api/library/12345/movie/rating" → trimmed = "12345/movie/rating"
 	trimmed := strings.TrimPrefix(r.URL.Path, "/api/library/")

@@ -9,6 +9,7 @@
 /*.flatpak
 /web/dist/
 /web/node_modules/
+/web/.eslintcache
 /CLAUDE.md
 
 # Proprietary — sourced from the _private/cove-discover submodule via `make inject-private`

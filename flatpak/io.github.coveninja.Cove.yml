@@ -119,3 +119,12 @@ modules:
       # Whole repo (including pre-built cove binary and web/dist)
       - type: dir
         path: ..
+        skip:
+          - .env
+          - .git
+          - .flatpak-builder
+          - _private
+          - node_modules
+          - web/node_modules
+          - qt/build
+          - cove-linux-amd64.flatpak

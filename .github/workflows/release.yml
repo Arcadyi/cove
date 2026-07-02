@@ -47,7 +47,7 @@ jobs:
       - name: Build
         env:
           CGO_ENABLED: '0'
-        run: go build -tags supabase,discover -ldflags "-X main.Version=${{ github.ref_name }} -X main.TmdbApiKey=${{ secrets.TMDB_API_KEY }} -X main.SupabaseURL=${{ secrets.SUPABASE_URL }} -X main.SupabaseAnonKey=${{ secrets.SUPABASE_PUBLISHABLE_KEY }} -X main.SupabaseServiceKey=${{ secrets.SUPABASE_SERVICE_KEY }} -X main.SupabaseJWTSecret=${{ secrets.SUPABASE_JWT_SECRET }}" -o cove .
+        run: go build -tags supabase,discover -ldflags "-X main.Version=${{ github.ref_name }} -X main.TmdbApiKey=${{ secrets.TMDB_API_KEY }} -X main.SupabaseURL=${{ secrets.SUPABASE_URL }} -X main.SupabaseAnonKey=${{ secrets.SUPABASE_PUBLISHABLE_KEY }}" -o cove .
 
       - name: Vet
         run: go vet -tags supabase,discover ./...
@@ -151,7 +151,7 @@ jobs:
       - name: Build Go backend
         env:
           CGO_ENABLED: '0'
-        run: go build -tags supabase,discover -ldflags "-X main.Version=${{ github.ref_name }} -X main.TmdbApiKey=${{ secrets.TMDB_API_KEY }} -X main.SupabaseURL=${{ secrets.SUPABASE_URL }} -X main.SupabaseAnonKey=${{ secrets.SUPABASE_PUBLISHABLE_KEY }} -X main.SupabaseServiceKey=${{ secrets.SUPABASE_SERVICE_KEY }} -X main.SupabaseJWTSecret=${{ secrets.SUPABASE_JWT_SECRET }}" -o cove .
+        run: go build -tags supabase,discover -ldflags "-X main.Version=${{ github.ref_name }} -X main.TmdbApiKey=${{ secrets.TMDB_API_KEY }} -X main.SupabaseURL=${{ secrets.SUPABASE_URL }} -X main.SupabaseAnonKey=${{ secrets.SUPABASE_PUBLISHABLE_KEY }}" -o cove .
 
       - name: Install web deps
         working-directory: web
@@ -198,6 +198,7 @@ jobs:
           sed -e "s/__VERSION__/${PKG_VER}/" \
               -e "s/__SHA256__/${SHA256}/" \
               packaging/PKGBUILD > PKGBUILD
+          printf '%s  cove-linux-amd64.tar.gz' "$SHA256" > cove-linux-amd64.tar.gz.sha256
 
       - name: Install Flatpak build tools and runtimes
         run: |
@@ -223,6 +224,7 @@ jobs:
           files: |
             cove-linux-amd64.flatpak
             cove-linux-amd64.tar.gz
+            cove-linux-amd64.tar.gz.sha256
             PKGBUILD
 
   package-windows:
@@ -310,7 +312,7 @@ jobs:
           CGO_ENABLED: '0'
           GOOS: windows
           GOARCH: amd64
-        run: go build -tags supabase,discover -ldflags "-X main.Version=${{ github.ref_name }} -X main.TmdbApiKey=${{ secrets.TMDB_API_KEY }} -X main.SupabaseURL=${{ secrets.SUPABASE_URL }} -X main.SupabaseAnonKey=${{ secrets.SUPABASE_PUBLISHABLE_KEY }} -X main.SupabaseServiceKey=${{ secrets.SUPABASE_SERVICE_KEY }} -X main.SupabaseJWTSecret=${{ secrets.SUPABASE_JWT_SECRET }}" -o cove.exe .
+        run: go build -tags supabase,discover -ldflags "-X main.Version=${{ github.ref_name }} -X main.TmdbApiKey=${{ secrets.TMDB_API_KEY }} -X main.SupabaseURL=${{ secrets.SUPABASE_URL }} -X main.SupabaseAnonKey=${{ secrets.SUPABASE_PUBLISHABLE_KEY }}" -o cove.exe .
 
       - name: Install web deps
         working-directory: web
@@ -365,6 +367,14 @@ jobs:
         run: |
           Compress-Archive -Path staging/* -DestinationPath cove-windows-amd64.zip
 
+      # The auto-updater downloads this alongside the zip and refuses to
+      # extract an archive whose SHA-256 doesn't match (see internal/updater).
+      - name: Publish zip checksum
+        shell: pwsh
+        run: |
+          $hash = (Get-FileHash cove-windows-amd64.zip -Algorithm SHA256).Hash.ToLower()
+          "$hash  cove-windows-amd64.zip" | Out-File cove-windows-amd64.zip.sha256 -Encoding ascii -NoNewline
+
       - name: Install NSIS
         shell: pwsh
         run: |
@@ -382,3 +392,4 @@ jobs:
           files: |
             cove-windows-amd64-setup.exe
             cove-windows-amd64.zip
+            cove-windows-amd64.zip.sha256

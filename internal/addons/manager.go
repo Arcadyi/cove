@@ -51,10 +51,13 @@ var officialAddons = []AddonEntry{
 }
 
 // New returns a Manager loaded from the profile-scoped store (or empty on first run).
-func New(profileID string) *Manager {
+// imdbLookup resolves a TMDB TV show ID to an IMDB ID (or "" on failure); it is
+// used by subtitle addons that only accept IMDB IDs.
+func New(profileID string, imdbLookup func(tmdbID int) string) *Manager {
 	m := &Manager{
 		client:          &http.Client{Timeout: 30 * time.Second},
 		officialEnabled: make(map[string]bool),
+		imdbLookup:      imdbLookup,
 	}
 
 	path, err := utils.ConfigPath(fmt.Sprintf("addons-%s.json", profileID))

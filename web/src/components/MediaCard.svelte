@@ -296,6 +296,8 @@
               randomize: true,
             })}
             alt={title}
+            loading="lazy"
+            decoding="async"
             class="block aspect-2/3 w-full rounded-md object-cover transition-all duration-300 {isWatched
               ? 'opacity-35'
               : 'opacity-100'} {isDropped ? 'opacity-10 grayscale' : ''}"
@@ -304,6 +306,8 @@
           <img
             src={media.poster_path}
             alt={title}
+            loading="lazy"
+            decoding="async"
             class="block aspect-2/3 w-full rounded-md object-cover transition-all duration-300 {isWatched
               ? 'opacity-35'
               : 'opacity-100'} {isDropped ? 'opacity-10 grayscale' : ''}"

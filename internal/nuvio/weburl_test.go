@@ -23,6 +23,13 @@ import (
 // garbage bytes that broke JSON.parse with a confusing "invalid character"
 // error instead of a clear decode failure or, ideally, a successful parse.
 func TestRunScraper_CompressedResponses(t *testing.T) {
+	// These exercise the decode path against a loopback httptest server, which
+	// the production SSRF-safe transport refuses — swap in a plain transport
+	// for the duration of the test.
+	orig := scraperTransport
+	scraperTransport = func() *http.Transport { return &http.Transport{} }
+	t.Cleanup(func() { scraperTransport = orig })
+
 	body := `{"ok":true,"streams":[{"name":"n","title":"t","url":"http://example.com/s.m3u8"}]}`
 
 	cases := []struct {

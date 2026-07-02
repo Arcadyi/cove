@@ -3,6 +3,7 @@
   import type { Media, TVEpisode } from "$lib/types/tmdb";
   import type { LibraryEntry, WatchProgress } from "$lib/types/library";
   import { libraryChanged } from "$lib/stores/library";
+  import { mediaFromEntry } from "$lib/mediaFromEntry";
   import { ChevronLeft, ChevronRight } from "lucide-svelte";
   import { Button } from "$lib/components/ui/button/index.js";
   import { Skeleton } from "$lib/components/ui/skeleton/index.js";
@@ -99,15 +100,14 @@
   }
 
   function toMedia(entry: LibraryEntry): Media {
-    return {
+    return mediaFromEntry({
       id: entry.tmdb_id,
       media_type: entry.media_type,
       title: entry.title,
       name: entry.title,
       poster_path: entry.poster_path,
       vote_average: entry.vote_average,
-      overview: "",
-    } as unknown as Media;
+    });
   }
 
   async function buildItem(entry: LibraryEntry): Promise<ContinueItem | null> {
@@ -193,7 +193,14 @@
     };
   }
 
+  // Sequence-token guard: libraryChanged can bump rapidly (e.g. a burst of
+  // progress saves), firing loadContinue again before the previous run's
+  // fetches — and the seasonCache reset below — have settled. Without this,
+  // an older run's results can land after and overwrite a newer run's.
+  let loadSeq = 0;
+
   async function loadContinue(): Promise<void> {
+    const seq = ++loadSeq;
     loading = true;
     seasonCache = new SvelteMap();
     try {
@@ -201,6 +208,8 @@
       // auto-creates one server-side), so this is the right starting set.
       const entries = await api.libraryList("watching");
       const results = await Promise.all(entries.map(buildItem));
+      // Superseded by a newer load while this one was in flight — discard.
+      if (seq !== loadSeq) return;
       items = results
         .filter((r): r is ContinueItem => r !== null)
         .toSorted(
@@ -208,7 +217,7 @@
             new Date(b.watchedAt).getTime() - new Date(a.watchedAt).getTime(),
         );
     } finally {
-      loading = false;
+      if (seq === loadSeq) loading = false;
     }
   }
 

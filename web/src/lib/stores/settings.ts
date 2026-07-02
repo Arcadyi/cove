@@ -1,5 +1,5 @@
 // src/lib/stores/settings.ts
-import { writable, derived, Subscriber, Unsubscriber } from "svelte/store";
+import { writable, Subscriber, Unsubscriber } from "svelte/store";
 import type { Settings } from "$lib/types/settings";
 import { api } from "$lib/api";
 
@@ -64,8 +64,3 @@ function createSettingsStore(): {
 }
 
 export const settings = createSettingsStore();
-
-// Convenience derived stores for single-flag subscriptions.
-export const openOnMute = derived(settings, ($s) => $s.openOnMute);
-export const defaultProvider = derived(settings, ($s) => $s.defaultProvider);
-export const autoPlay = derived(settings, ($s) => $s.autoPlay);

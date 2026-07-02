@@ -23,6 +23,10 @@ interface QtSignal<A extends unknown[]> {
 }
 
 interface MpvBridge {
+  // False when libmpv failed to initialize in the shell (broken GL/mpv
+  // stack); the shell keeps running but playback is impossible.
+  valid?: boolean;
+
   positionChanged: QtSignal<[number]>;
   durationChanged: QtSignal<[number]>;
   pausedChanged: QtSignal<[boolean]>;
@@ -96,6 +100,11 @@ class MpvPlayer {
     new Channel(transport, (channel) => {
       const mpv = channel.objects.mpv;
       if (!mpv) { console.error('[player] mpv missing from channel'); return; }
+      if (mpv.valid === false) {
+        console.warn('[player] mpv failed to initialize in the shell — playback unavailable');
+        this.available = false;
+        return;
+      }
       this.#mpv = mpv;
 
       mpv.positionChanged.connect((s) => {

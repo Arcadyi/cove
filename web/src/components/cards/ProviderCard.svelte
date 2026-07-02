@@ -20,6 +20,8 @@
       <img
         src={provider.logo_path}
         alt={provider.provider_name}
+        loading="lazy"
+        decoding="async"
         class="h-full w-full object-contain p-3 transition-transform duration-200 group-hover:scale-105"
       />
     {:else}

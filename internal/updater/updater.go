@@ -13,6 +13,8 @@ import (
 	"archive/tar"
 	"archive/zip"
 	"compress/gzip"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -27,6 +29,13 @@ import (
 	"time"
 
 	"github.com/coveninja/cove/internal/utils"
+)
+
+// apiClient bounds GitHub API metadata calls; downloadClient allows much
+// longer for the release archive itself on slow connections.
+var (
+	apiClient      = &http.Client{Timeout: 30 * time.Second}
+	downloadClient = &http.Client{Timeout: 10 * time.Minute}
 )
 
 // RestartExitCode is the exit code the Go backend uses to signal the Qt shell
@@ -49,11 +58,13 @@ func assetName() string {
 	return fmt.Sprintf("cove-%s-%s%s", runtime.GOOS, runtime.GOARCH, ext)
 }
 
-// pendingURL is set by check() and consumed by applyUpdate(). Storing it
-// server-side avoids accepting a client-supplied download URL (SSRF risk).
+// pendingURL/pendingChecksumURL are set by check() and consumed by
+// applyUpdate(). Storing them server-side avoids accepting a client-supplied
+// download URL (SSRF risk).
 var (
-	mu         sync.Mutex
-	pendingURL string
+	mu                 sync.Mutex
+	pendingURL         string
+	pendingChecksumURL string
 )
 
 // CheckResult is the JSON payload returned by GET /api/update/check.
@@ -122,7 +133,7 @@ func fetchLatest() (*ghRelease, error) {
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := apiClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -175,24 +186,65 @@ func check(currentVersion string) (*CheckResult, error) {
 	}
 
 	want := assetName()
+	var assetURL, checksumURL string
 	for _, a := range rel.Assets {
-		if a.Name == want {
-			result.Available = true
-			mu.Lock()
-			pendingURL = a.BrowserDownloadURL
-			mu.Unlock()
-			break
+		switch a.Name {
+		case want:
+			assetURL = a.BrowserDownloadURL
+		case want + ".sha256":
+			checksumURL = a.BrowserDownloadURL
 		}
 	}
+	if assetURL == "" {
+		return result, nil
+	}
+	if checksumURL == "" {
+		// Fail closed: an update that can't be verified is not offered.
+		// Every release newer than the build carrying this code also
+		// publishes .sha256 assets, so this only fires on a broken release.
+		log.Printf("[updater] release %s has no %s.sha256 asset; refusing unverifiable update", rel.TagName, want)
+		return result, nil
+	}
+	result.Available = true
+	mu.Lock()
+	pendingURL = assetURL
+	pendingChecksumURL = checksumURL
+	mu.Unlock()
 	return result, nil
+}
+
+// fetchChecksum downloads a .sha256 asset and returns the hex digest (the
+// first whitespace-delimited field, tolerating "hash  filename" format).
+func fetchChecksum(url string) (string, error) {
+	resp, err := apiClient.Get(url)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("checksum download: HTTP %d", resp.StatusCode)
+	}
+	data, err := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	if err != nil {
+		return "", err
+	}
+	sum := strings.Fields(string(data))
+	if len(sum) == 0 || len(sum[0]) != sha256.Size*2 {
+		return "", fmt.Errorf("malformed checksum file")
+	}
+	if _, err := hex.DecodeString(sum[0]); err != nil {
+		return "", fmt.Errorf("malformed checksum file: %w", err)
+	}
+	return strings.ToLower(sum[0]), nil
 }
 
 func applyUpdate() error {
 	mu.Lock()
 	url := pendingURL
+	checksumURL := pendingChecksumURL
 	mu.Unlock()
 
-	if url == "" {
+	if url == "" || checksumURL == "" {
 		return fmt.Errorf("no pending update (call /api/update/check first)")
 	}
 
@@ -202,8 +254,13 @@ func applyUpdate() error {
 	}
 	destDir := filepath.Dir(execPath)
 
+	wantSum, err := fetchChecksum(checksumURL)
+	if err != nil {
+		return fmt.Errorf("checksum: %w", err)
+	}
+
 	log.Printf("[updater] downloading %s", url)
-	resp, err := http.Get(url) //nolint:noctx
+	resp, err := downloadClient.Get(url) //nolint:noctx
 	if err != nil {
 		return fmt.Errorf("download: %w", err)
 	}
@@ -212,25 +269,39 @@ func applyUpdate() error {
 		return fmt.Errorf("download: HTTP %d", resp.StatusCode)
 	}
 
-	log.Printf("[updater] extracting to %s", destDir)
-	if runtime.GOOS == "windows" {
-		// archive/zip requires io.ReaderAt, so download to a temp file first.
-		tmp, err := os.CreateTemp("", "cove-update-*.zip")
-		if err != nil {
-			return fmt.Errorf("temp file: %w", err)
-		}
-		tmpName := tmp.Name()
-		defer os.Remove(tmpName)
-		if _, err := io.Copy(tmp, resp.Body); err != nil {
-			tmp.Close()
-			return fmt.Errorf("download: %w", err)
-		}
+	// Spool to a temp file, hashing as we go: nothing touches destDir until
+	// the archive's SHA-256 matches the published checksum.
+	tmp, err := os.CreateTemp("", "cove-update-*")
+	if err != nil {
+		return fmt.Errorf("temp file: %w", err)
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName)
+	hasher := sha256.New()
+	if _, err := io.Copy(io.MultiWriter(tmp, hasher), resp.Body); err != nil {
 		tmp.Close()
+		return fmt.Errorf("download: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("temp file: %w", err)
+	}
+	gotSum := hex.EncodeToString(hasher.Sum(nil))
+	if gotSum != wantSum {
+		return fmt.Errorf("checksum mismatch: archive %s, expected %s", gotSum, wantSum)
+	}
+
+	log.Printf("[updater] checksum verified — extracting to %s", destDir)
+	if runtime.GOOS == "windows" {
 		if err := extractZip(tmpName, destDir, filepath.Base(execPath)); err != nil {
 			return fmt.Errorf("extract: %w", err)
 		}
 	} else {
-		if err := extractTarGz(resp.Body, destDir); err != nil {
+		f, err := os.Open(tmpName)
+		if err != nil {
+			return fmt.Errorf("temp file: %w", err)
+		}
+		defer f.Close()
+		if err := extractTarGz(f, destDir); err != nil {
 			return fmt.Errorf("extract: %w", err)
 		}
 	}
@@ -246,6 +317,18 @@ func applyUpdate() error {
 	return nil
 }
 
+// securePath joins an archive entry name into destDir, erroring on any entry
+// that would land outside it. Tampering aborts the whole update — a partially
+// applied archive is worse than none.
+func securePath(destDir, name string) (string, error) {
+	target := filepath.Join(destDir, filepath.FromSlash(name))
+	rel, err := filepath.Rel(destDir, target)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
+		return "", fmt.Errorf("archive entry escapes destination: %s", name)
+	}
+	return target, nil
+}
+
 // extractZip extracts a .zip archive into destDir. selfName is the base name
 // of the currently-running binary; on Windows a running .exe cannot be renamed
 // over itself, so it is written as selfName+".new" and the Qt shell performs
@@ -258,18 +341,19 @@ func extractZip(zipPath, destDir, selfName string) error {
 	defer r.Close()
 
 	for _, f := range r.File {
-		if strings.Contains(filepath.ToSlash(f.Name), "..") {
-			log.Printf("[updater] skipping suspicious path: %s", f.Name)
-			continue
+		target, err := securePath(destDir, f.Name)
+		if err != nil {
+			return err
 		}
-
-		target := filepath.Join(destDir, filepath.FromSlash(f.Name))
 
 		if f.FileInfo().IsDir() {
 			if err := os.MkdirAll(target, 0o755); err != nil {
 				return err
 			}
 			continue
+		}
+		if !f.FileInfo().Mode().IsRegular() {
+			return fmt.Errorf("archive contains non-regular entry: %s", f.Name)
 		}
 		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 			return err
@@ -321,13 +405,10 @@ func extractTarGz(r io.Reader, destDir string) error {
 			return err
 		}
 
-		// Path traversal guard: reject entries with ".." components.
-		if strings.Contains(filepath.ToSlash(hdr.Name), "..") {
-			log.Printf("[updater] skipping suspicious path: %s", hdr.Name)
-			continue
+		target, err := securePath(destDir, hdr.Name)
+		if err != nil {
+			return err
 		}
-
-		target := filepath.Join(destDir, filepath.FromSlash(hdr.Name))
 
 		switch hdr.Typeflag {
 		case tar.TypeDir:
@@ -338,8 +419,14 @@ func extractTarGz(r io.Reader, destDir string) error {
 			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 				return err
 			}
+			// Mask modes from the archive: regular files get 0644, anything
+			// marked executable gets 0755 — never setuid/sticky bits.
+			perm := os.FileMode(0o644)
+			if hdr.Mode&0o111 != 0 {
+				perm = 0o755
+			}
 			tmp := target + ".new"
-			f, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, os.FileMode(hdr.Mode))
+			f, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, perm)
 			if err != nil {
 				return err
 			}
@@ -354,6 +441,11 @@ func extractTarGz(r io.Reader, destDir string) error {
 			if err := os.Rename(tmp, target); err != nil {
 				return err
 			}
+		case tar.TypeSymlink, tar.TypeLink:
+			return fmt.Errorf("archive contains link entry: %s", hdr.Name)
+		default:
+			// PAX/global headers and other metadata entries carry no payload
+			// this extractor cares about — ignore them.
 		}
 	}
 	return nil
