@@ -8,7 +8,9 @@
 //   ./cove_shell --play <file>   → plays <file> behind a translucent test overlay
 
 #include <QCommandLineParser>
+#include <QCoreApplication>
 #include <QDir>
+#include <QElapsedTimer>
 #include <QFile>
 #include <QFileInfo>
 #include <QGuiApplication>
@@ -18,9 +20,11 @@
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
 #include <QQuickWindow>
+#include <QStandardPaths>
 #include <QSurfaceFormat>
 #include <QTcpServer>
 #include <QTcpSocket>
+#include <QTextStream>
 #include <QTimer>
 #include <QUrl>
 #include <QtWebEngineQuick/QtWebEngineQuick>
@@ -30,6 +34,10 @@
 #include <functional>
 #include <memory>
 
+#ifdef Q_OS_WIN
+#include <windows.h>
+#endif
+
 #include "MpvObject.h"
 
 // Filter noisy-but-benign Qt WebChannel warnings about QQuickItem-inherited
@@ -37,12 +45,55 @@
 // signals. WebChannel's introspection emits one per property at startup; they
 // have no effect on functionality.
 static QtMessageHandler s_defaultMsgHandler = nullptr;
+static QFile *s_logFile = nullptr;
+static QString s_logFilePath;
+
 static void msgFilter(QtMsgType type, const QMessageLogContext &ctx,
                       const QString &msg) {
   if (type == QtWarningMsg &&
       msg.contains(QLatin1String("has no notify signal")))
     return;
+  if (s_logFile && s_logFile->isOpen()) {
+    QTextStream ts(s_logFile);
+    ts << msg << '\n';
+    ts.flush();
+  }
   s_defaultMsgHandler(type, ctx, msg);
+}
+
+// Opens <config dir>/cove/shell.log, truncated each run. cove_shell is built
+// WIN32-subsystem on Windows (see CMakeLists.txt) so it has no console —
+// without this file, every qInfo()/qWarning() below is discarded and a
+// startup failure is completely undiagnosable.
+static void openLogFile() {
+  const QString dir = QDir(QStandardPaths::writableLocation(
+                                QStandardPaths::GenericConfigLocation))
+                          .filePath("cove");
+  QDir().mkpath(dir);
+  s_logFilePath = QDir(dir).filePath("shell.log");
+  s_logFile = new QFile(s_logFilePath);
+  if (!s_logFile->open(QIODevice::WriteOnly | QIODevice::Truncate |
+                        QIODevice::Text)) {
+    delete s_logFile;
+    s_logFile = nullptr;
+  }
+}
+
+// Surfaces a fatal startup failure to the user, then exits. A QML-rendered
+// error screen would depend on the same Qt Quick/OpenGL stack that's the top
+// suspect for a startup failure in the first place; MessageBoxW works even
+// if that stack itself is what's broken. Non-Windows builds still have a
+// console, so the qWarning() below is enough there.
+static void reportStartupFailure(const QString &reason) {
+  qWarning().noquote() << "[shell] startup failed:" << reason;
+#ifdef Q_OS_WIN
+  const QString text =
+      reason + QStringLiteral("\n\nLog file: ") + s_logFilePath;
+  MessageBoxW(nullptr, reinterpret_cast<const wchar_t *>(text.utf16()),
+              L"Cove — Startup Error", MB_OK | MB_ICONERROR);
+#endif
+  if (qApp)
+    qApp->exit(1);
 }
 
 // ── Static file server ───────────────────────────────────────────────────────
@@ -151,23 +202,40 @@ static QProcess *startBackend(const QString &exePath, QObject *parent) {
   return proc;
 }
 
-static void waitForBackend(quint16 port, std::function<void()> onReady) {
+// Polls 127.0.0.1:port until it accepts a connection, then calls onReady.
+// Calls onTimeout instead if the backend never comes up within timeoutMs —
+// without this, a backend that's alive but never binds the port (or never
+// started at all) left the shell polling forever with no window and no
+// error, indistinguishable from the app doing nothing.
+static void waitForBackend(quint16 port, int timeoutMs,
+                            std::function<void()> onReady,
+                            std::function<void()> onTimeout) {
   auto *timer = new QTimer;
   timer->setInterval(150);
-  QObject::connect(timer, &QTimer::timeout, timer, [timer, port, onReady]() {
-    auto *probe = new QTcpSocket;
-    QObject::connect(probe, &QTcpSocket::connected, probe,
-                     [timer, probe, onReady]() {
-                       timer->stop();
-                       timer->deleteLater();
-                       probe->abort();
-                       probe->deleteLater();
-                       onReady();
-                     });
-    QObject::connect(probe, &QTcpSocket::errorOccurred, probe,
-                     [probe]() { probe->deleteLater(); });
-    probe->connectToHost(QHostAddress::LocalHost, port);
-  });
+  auto elapsed = std::make_shared<QElapsedTimer>();
+  elapsed->start();
+  QObject::connect(
+      timer, &QTimer::timeout, timer,
+      [timer, port, timeoutMs, onReady, onTimeout, elapsed]() {
+        if (elapsed->hasExpired(timeoutMs)) {
+          timer->stop();
+          timer->deleteLater();
+          onTimeout();
+          return;
+        }
+        auto *probe = new QTcpSocket;
+        QObject::connect(probe, &QTcpSocket::connected, probe,
+                         [timer, probe, onReady]() {
+                           timer->stop();
+                           timer->deleteLater();
+                           probe->abort();
+                           probe->deleteLater();
+                           onReady();
+                         });
+        QObject::connect(probe, &QTcpSocket::errorOccurred, probe,
+                         [probe]() { probe->deleteLater(); });
+        probe->connectToHost(QHostAddress::LocalHost, port);
+      });
   timer->start();
 }
 
@@ -277,6 +345,8 @@ int main(int argc, char *argv[]) {
   app.setApplicationName("cove");
   app.setOrganizationName("coveninja");
 
+  openLogFile();
+
   qmlRegisterType<MpvObject>("mpv", 1, 0, "MpvObject");
 
   QCommandLineParser parser;
@@ -336,8 +406,12 @@ int main(int argc, char *argv[]) {
 
     auto *server = new StaticServer(webRoot, &app);
     const QUrl baseUrl = server->start();
-    if (baseUrl.isEmpty())
+    if (baseUrl.isEmpty()) {
+      reportStartupFailure(QStringLiteral(
+          "Local static server failed to bind 127.0.0.1:5174 (port already "
+          "in use by another instance?)."));
       return 1;
+    }
     qInfo().noquote() << "[shell] serving renderer at" << baseUrl.toString();
 
     QProcess *backend = startBackend(backendPath, &app);
@@ -349,6 +423,22 @@ int main(int argc, char *argv[]) {
         backend->kill();
     });
 
+    // Guards against reportStartupFailure firing twice (e.g. errorOccurred
+    // and finished both fire for a crashed process) and against a late
+    // failure signal arriving after the backend was already confirmed ready.
+    auto settled = std::make_shared<bool>(false);
+
+    QObject::connect(
+        backend, &QProcess::errorOccurred, &app,
+        [backend, backendPath, settled](QProcess::ProcessError) {
+          if (*settled)
+            return;
+          *settled = true;
+          reportStartupFailure(
+              QStringLiteral("Backend process failed to start: %1 (path: %2)")
+                  .arg(backend->errorString(), backendPath));
+        });
+
     // Exit code 42 signals that the backend applied an update and wants the
     // shell to restart so the new binaries are loaded. Re-exec this process
     // with the same arguments, then quit the current instance.
@@ -358,7 +448,7 @@ int main(int argc, char *argv[]) {
     QObject::connect(
         backend,
         QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
-        [&app, backendPath](int exitCode, QProcess::ExitStatus) {
+        [&app, backendPath, settled](int exitCode, QProcess::ExitStatus) {
           if (exitCode == 42) {
 #ifdef Q_OS_WIN
             const QString newExe = backendPath + ".new";
@@ -372,17 +462,39 @@ int main(int argc, char *argv[]) {
             QProcess::startDetached(QCoreApplication::applicationFilePath(),
                                     args);
             app.quit();
+            return;
+          }
+          if (!*settled) {
+            *settled = true;
+            reportStartupFailure(
+                QStringLiteral(
+                    "Backend exited before it was ready (exit code %1).")
+                    .arg(exitCode));
           }
         });
 
-waitForBackend(apiPort, [loadScene, baseUrl, isDev]() {
-      qInfo().noquote() << "[shell] backend up — loading UI";
-      if (isDev) {
-        loadScene(QStringLiteral("http://localhost:5173"), QString());
-      } else {
-        loadScene(baseUrl.toString(), QString());
-      }
-    });
+    waitForBackend(
+        apiPort, 20000,
+        [loadScene, baseUrl, isDev, settled]() {
+          if (*settled)
+            return;
+          *settled = true;
+          qInfo().noquote() << "[shell] backend up — loading UI";
+          if (isDev) {
+            loadScene(QStringLiteral("http://localhost:5173"), QString());
+          } else {
+            loadScene(baseUrl.toString(), QString());
+          }
+        },
+        [apiPort, settled]() {
+          if (*settled)
+            return;
+          *settled = true;
+          reportStartupFailure(
+              QStringLiteral(
+                  "Backend did not respond on 127.0.0.1:%1 within 20s.")
+                  .arg(apiPort));
+        });
   }
 
   return app.exec();

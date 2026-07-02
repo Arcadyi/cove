@@ -336,6 +336,17 @@ jobs:
           # MPV_DLL was set by the Generate MSVC import library step
           Copy-Item "${{ env.MPV_DLL }}" qt/build/mpv-2.dll
 
+          # cove_shell forces Qt Quick onto the OpenGL RHI (main.cpp — mpv only
+          # implements OpenGL rendering). On machines with a missing/broken GPU
+          # driver, opengl32sw.dll (Qt's bundled Mesa software rasterizer) is
+          # the only fallback; windeployqt should bundle it automatically, but
+          # fail loudly here instead of shipping a build that can silently
+          # fail to open a window on such machines.
+          if (-not (Test-Path "qt/build/opengl32sw.dll")) {
+            Write-Error "opengl32sw.dll missing from windeployqt output — Windows builds without a working GPU driver would fail to render with no fallback."
+            exit 1
+          }
+
       - name: Assemble staging directory
         shell: pwsh
         run: |

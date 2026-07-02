@@ -14,6 +14,7 @@ Window {
     height: 850
     title: "Cove"
     color: "black"
+    icon: "qrc:/cove.png"
 
     MpvObject {
         id: mpv

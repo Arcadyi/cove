@@ -1,5 +1,6 @@
 <RCC>
   <qresource prefix="/">
     <file>qml/main.qml</file>
+    <file alias="cove.png">resources/cove.png</file>
   </qresource>
 </RCC>

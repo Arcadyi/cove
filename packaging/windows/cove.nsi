@@ -1,6 +1,11 @@
 Unicode True
 !include "MUI2.nsh"
 
+; Installer/uninstaller exe icon — cove_shell.exe embeds the same icon itself
+; via qt/resources/cove.rc, so this only covers the setup.exe/uninstall.exe.
+!define MUI_ICON   "..\..\qt\resources\cove.ico"
+!define MUI_UNICON "..\..\qt\resources\cove.ico"
+
 ; Passed in from CI: makensis /DVERSION=v0.14.5 /DOUTDIR=C:\...\workspace cove.nsi
 ; Falls back to sensible defaults for local testing.
 !ifndef VERSION
@@ -44,6 +49,14 @@ Var StartMenuFolder
 ; ── Install ───────────────────────────────────────────────────────────────────
 Section "-Core" SecCore
   SectionIn RO
+
+  ; cove_shell.exe is MSVC-built and needs the VC++ 2015-2022 (x64) runtime to
+  ; run at all; a fresh/minimal Windows install may lack it. This is a warning,
+  ; not a blocker — the install still proceeds either way.
+  ClearErrors
+  ReadRegDWORD $0 HKLM "SOFTWARE\WOW6432Node\Microsoft\VisualStudio\14.0\VC\Runtimes\X64" "Installed"
+  IfErrors 0 +2
+    MessageBox MB_OK|MB_ICONEXCLAMATION "Cove requires the Microsoft Visual C++ Redistributable (x64), which doesn't appear to be installed.$\r$\n$\r$\nIf Cove doesn't start after installing, get it from:$\r$\nhttps://aka.ms/vs/17/release/vc_redist.x64.exe"
 
   SetOutPath "$INSTDIR"
   ; All files are pre-assembled in staging\ by the CI package job.
