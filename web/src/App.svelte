@@ -33,6 +33,7 @@
   import SplashScreen from "./components/SplashScreen.svelte";
   import { auth } from "$lib/stores/auth.svelte";
   import { libraryChanged } from "$lib/stores/library";
+  import { Spinner } from "$lib/components/ui/spinner";
 
   // Wire api.ts to read the JWT directly from the auth store on every request,
   // avoiding any $effect timing gap between auth state changing and the token
@@ -75,6 +76,18 @@
 
   let playerSession = $state<PlayerSession | null>(null);
   let playerMode = $state<"full" | null>(null);
+
+  // Covers the gap between a "Watch" click and playerSession being set — the
+  // fetchStreamsWithRetry/pickBestStream/tvEpisodes work in quickPlay, none of
+  // which shows anything today.
+  let quickPlayPending = $state<{ media: Media; message: string } | null>(
+    null,
+  );
+
+  // Not $state — bumped on every quickPlay call so a stale call (superseded
+  // by a newer "Watch" click before the first one resolved) can detect it's
+  // stale and skip touching quickPlayPending/playerSession.
+  let quickPlayToken = 0;
 
   const canGoBack = $derived(playerMode === "full" || pageHistory.length > 0);
 
@@ -310,6 +323,7 @@
     episode?: number,
     episodeName?: string,
   ): void {
+    quickPlayPending = null;
     playStartSound();
 
     playerSession = {
@@ -372,6 +386,9 @@
     season?: number,
     episode?: number,
   ): Promise<void> {
+    const myToken = ++quickPlayToken;
+    quickPlayPending = { media, message: "Finding streams…" };
+
     const isTV = media.media_type === "tv";
     const targetSeason = isTV ? (season ?? 1) : undefined;
     const targetEpisode = isTV ? (episode ?? 1) : undefined;
@@ -384,7 +401,14 @@
           : {},
       ),
     );
-    if (streams.length === 0) return;
+    if (myToken !== quickPlayToken) return;
+    if (streams.length === 0) {
+      quickPlayPending = { media, message: "No stream found" };
+      setTimeout(() => {
+        if (myToken === quickPlayToken) quickPlayPending = null;
+      }, 2500);
+      return;
+    }
 
     const mode =
       ($settings?.streamSelectionMode as StreamSelectionMode) ?? "balanced";
@@ -392,7 +416,13 @@
       measuredBandwidthMbps: $settings?.measuredBandwidthMbps,
       preferredProvider: $settings?.defaultProvider,
     });
-    if (!best) return;
+    if (!best) {
+      quickPlayPending = { media, message: "No stream found" };
+      setTimeout(() => {
+        if (myToken === quickPlayToken) quickPlayPending = null;
+      }, 2500);
+      return;
+    }
 
     let episodeName: string | undefined;
     if (isTV) {
@@ -405,6 +435,7 @@
         console.error("quickPlay: failed to fetch episode name", e);
       }
     }
+    if (myToken !== quickPlayToken) return;
 
     startPlayback(media, best, targetSeason, targetEpisode, episodeName);
   }
@@ -539,6 +570,49 @@
           </div>
         </div>
       </div>
+
+      {#if quickPlayPending && !playerSession}
+        <!--
+          Covers the gap between a "Watch" click and playerSession being set,
+          i.e. before <PlayerComponent> even mounts (and before its own
+          "Connecting to peers…"/"Buffering…" loading screen can show
+          anything). Mirrors that loading screen's visual style — blurred
+          poster backdrop, Spinner, status text — for a seamless handoff.
+        -->
+        <div
+          class="absolute inset-0 z-30 flex flex-col items-center justify-center bg-black"
+          transition:fade={{ duration: 150 }}
+        >
+          {#if quickPlayPending.media.poster_path}
+            <div
+              class="absolute inset-0 scale-110 bg-cover bg-center"
+              style="background-image: url('{quickPlayPending.media
+                .poster_path}'); filter: blur(5px); opacity: 0.35;"
+            ></div>
+            <div class="absolute inset-0 bg-black/65"></div>
+            <img
+              src={quickPlayPending.media.poster_path}
+              alt={quickPlayPending.media.media_type === "tv"
+                ? quickPlayPending.media.name
+                : quickPlayPending.media.title}
+              class="relative z-10 h-48 w-32 rounded-lg object-cover shadow-2xl"
+            />
+          {:else}
+            <div class="absolute inset-0 bg-black/65"></div>
+            <span
+              class="relative z-10 px-8 text-center text-3xl font-bold text-white"
+            >
+              {quickPlayPending.media.media_type === "tv"
+                ? quickPlayPending.media.name
+                : quickPlayPending.media.title}
+            </span>
+          {/if}
+          <Spinner class="relative z-10 mt-6 size-10" />
+          <p class="relative z-10 mt-4 text-sm text-white/50">
+            {quickPlayPending.message}
+          </p>
+        </div>
+      {/if}
 
       {#if playerSession}
         <!--
