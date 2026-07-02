@@ -8,10 +8,10 @@ func TestParseGitHubURL(t *testing.T) {
 		owner, name, branch, path string
 		rawForm                   bool
 	}{
-		{in: "https://github.com/yoruix/nuvio-providers", owner: "yoruix", name: "nuvio-providers"},
-		{in: "github.com/yoruix/nuvio-providers/", owner: "yoruix", name: "nuvio-providers"},
-		{in: "https://github.com/yoruix/nuvio-providers.git", owner: "yoruix", name: "nuvio-providers"},
-		{in: "https://github.com/yoruix/nuvio-providers/tree/dev", owner: "yoruix", name: "nuvio-providers", branch: "dev"},
+		{in: "https://github.com/someowner/some-repo", owner: "someowner", name: "some-repo"},
+		{in: "github.com/someowner/some-repo/", owner: "someowner", name: "some-repo"},
+		{in: "https://github.com/someowner/some-repo.git", owner: "someowner", name: "some-repo"},
+		{in: "https://github.com/someowner/some-repo/tree/dev", owner: "someowner", name: "some-repo", branch: "dev"},
 	}
 	for _, c := range cases {
 		owner, name, branch, err := parseGitHubURL(c.in)
@@ -25,9 +25,9 @@ func TestParseGitHubURL(t *testing.T) {
 	}
 }
 
-// TestParseRawGithubUsercontentURL covers the exact URL shape community
-// catalogs like nuvioplugin.com hand users via a "copy manifest URL" button —
-// this previously fell through to parseGitHubURL and failed with "not a
+// TestParseRawGithubUsercontentURL covers the exact URL shape some community
+// plugin directories hand users via a "copy manifest URL" button — this
+// previously fell through to parseGitHubURL and failed with "not a
 // github.com/owner/repo URL".
 func TestParseRawGithubUsercontentURL(t *testing.T) {
 	cases := []struct {
@@ -36,31 +36,31 @@ func TestParseRawGithubUsercontentURL(t *testing.T) {
 		ok                        bool
 	}{
 		{
-			in:     "https://raw.githubusercontent.com/yoruix/nuvio-providers/refs/heads/main/manifest.json",
-			owner:  "yoruix",
-			name:   "nuvio-providers",
+			in:     "https://raw.githubusercontent.com/someowner/some-repo/refs/heads/main/manifest.json",
+			owner:  "someowner",
+			name:   "some-repo",
 			branch: "main",
 			path:   "manifest.json",
 			ok:     true,
 		},
 		{
-			in:     "https://raw.githubusercontent.com/yoruix/nuvio-providers/main/manifest.json",
-			owner:  "yoruix",
-			name:   "nuvio-providers",
+			in:     "https://raw.githubusercontent.com/someowner/some-repo/main/manifest.json",
+			owner:  "someowner",
+			name:   "some-repo",
 			branch: "main",
 			path:   "manifest.json",
 			ok:     true,
 		},
 		{
-			in:     "raw.githubusercontent.com/yoruix/nuvio-providers/refs/heads/dev/providers/manifest.json",
-			owner:  "yoruix",
-			name:   "nuvio-providers",
+			in:     "raw.githubusercontent.com/someowner/some-repo/refs/heads/dev/providers/manifest.json",
+			owner:  "someowner",
+			name:   "some-repo",
 			branch: "dev",
 			path:   "providers/manifest.json",
 			ok:     true,
 		},
 		{
-			in: "https://github.com/yoruix/nuvio-providers",
+			in: "https://github.com/someowner/some-repo",
 			ok: false,
 		},
 	}

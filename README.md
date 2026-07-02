@@ -16,12 +16,18 @@
 ## Features
 
 - **Stream anything** — connects to Stremio-compatible addon sources and streams directly in the app
-- **Built-in player** — hardware-accelerated mpv playback with subtitle support and progress saving
+- **Extend with plugins** — add community JS scraper plugins for additional stream sources, sandboxed and opt-in per scraper
+- **Built-in player** — hardware-accelerated mpv playback with subtitle support, live buffering/download progress, and progress saving
+- **Smart stream picker** — auto-selects the best available stream using a configurable strategy (quality, size, reliability, or a connection-speed match via a built-in speed test), or sort/filter candidates yourself
+- **Skip intro & recap** — auto-skip buttons for intro, recap, and credits segments during playback, independently toggleable
+- **Where to watch** — see which legal streaming/rental services carry a title alongside the stream picker
 - **Discover** — personalized recommendations based on your watch history, ratings, and taste profile
 - **Library** — track what you've watched, mark favorites, and pick up where you left off with continue watching
 - **Explore** — browse trending, upcoming releases, genres, and curated categories
 - **Insights** — view your watch stats and genre/actor taste breakdown
 - **Search** — find any movie or TV show by title
+- **Spoiler-free browsing** — optionally blurs thumbnails and titles for unwatched episodes
+- **Multiple profiles** — local, Netflix-style profile switching, works fully offline with no sign-in required
 - **Accounts & sync** — optional sign-in syncs your library and preferences across devices
 
 ## Install
@@ -88,7 +94,7 @@ npm run format  # prettier
 
 ## Configuration
 
-Addon URLs can be configured in the app's Settings page. The default setup includes some built-in addons but provides no streams apart from official sources.
+A fresh profile ships with no provider addons and no plugin repos enabled — only two hardcoded "official" integrations (streaming-availability lookup, intro/recap timestamps) work out of the box. To get streams, add one or more Stremio-compatible addon URLs and/or community plugin repos in the app's Settings page.
 
 ## Documentation
 

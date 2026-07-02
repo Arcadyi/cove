@@ -15,8 +15,8 @@ Cove is three processes cooperating over local sockets, not one monolith:
 
 1. **Go backend** (`main.go` + `internal/`) — an HTTP server on `:6969`
    handling TMDB metadata, streaming, addon integration (Stremio-style
-   providers/subtitles), the local library/settings/profiles stores, and
-   personalized recommendations.
+   providers/subtitles), sandboxed community plugin execution, the local
+   library/settings/profiles stores, and personalized recommendations.
 2. **Svelte frontend** (`web/`) — a Svelte 5 + TypeScript + Vite SPA that
    talks exclusively to the Go backend over HTTP (`web/src/lib/api.ts`). It
    has no direct filesystem or process access of its own.
@@ -61,6 +61,17 @@ server's URL or, in `--dev` mode, Vite's dev server at `localhost:5173`.
   file in a torrent as seekable HTTP (`http.ServeContent`, so mpv's Range
   requests just work). See "Playback data flow" below — there is no
   transcoding here.
+- **`nuvio`** — runs community-maintained JS scraper plugins in a sandboxed
+  `goja` runtime (pure Go, no CGO, no Node) to produce additional direct-HTTP
+  stream candidates alongside `addons`. Off by default: a plugin repo must be
+  added and each scraper individually enabled by the user. One fresh
+  runtime per invocation, bounded by a per-scraper timeout and an overall
+  deadline for the whole batch; per-scraper errors/timeouts are logged and
+  skipped, matching `addons`'s swallow-per-failure philosophy. Called only
+  from `player.go`'s `/api/streams` handler — deliberately excluded from
+  `tmdb.go`'s batched `/api/quality/batch` endpoint, which fans out over
+  every title in a discovery grid and can't afford a JS runtime + network
+  call per tile.
 - **`profiles`** — Netflix-style local user profiles (not to be confused with
   content-rating). Switching the active profile reloads `library`,
   `settings`, and `addons` in place via a callback registered in `main.go`.
@@ -84,7 +95,10 @@ server's URL or, in `--dev` mode, Vite's dev server at `localhost:5173`.
 ## Playback data flow
 1. The frontend requests candidate streams for a title via `GET /api/streams`
    (`internal/player/player.go:316`), which fans out to
-   `addons.Manager.GetAllStreams` — each enabled provider addon contributes infohashes and/or direct URLs.
+   `addons.Manager.GetAllStreams` — each enabled provider addon contributes
+   infohashes and/or direct URLs — and, if any Nuvio scrapers are enabled,
+   `nuvio.Manager.GetStreams`, which runs each one in its own sandboxed goja
+   runtime and appends whatever direct-HTTP streams they produce.
 2. `Player.svelte` picks a source (`streamSelection.ts`'s `pickBestStream`, or
    a manual choice) and calls `Player.play(api.playUrl(src))`
    (`web/src/lib/player/player.svelte.ts`). `playUrl` builds either

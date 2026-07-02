@@ -3,9 +3,9 @@
 Real-world Nuvio scrapers frequently `require()` a small set of npm packages
 that assume a JS environment (Node, or React Native via Metro) rather than
 the sandboxed goja runtime Cove embeds. Roughly half of the scrapers in
-`yoruix/nuvio-providers` depend on one or both of these two packages, so
-they're vendored here as pre-bundled, dependency-free CommonJS files and
-registered as native `require()` modules in `runtime.go`.
+real-world community plugin collections depend on one or both of these two
+packages, so they're vendored here as pre-bundled, dependency-free CommonJS
+files and registered as native `require()` modules in `runtime.go`.
 
 - `crypto-js.js` — vendored from `crypto-js@4.2.0`. Falls back to the
   `crypto` global for randomness (see `bindWebGlobals` in `weburl.go`); its

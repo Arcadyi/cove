@@ -7,8 +7,8 @@ import (
 )
 
 // TestRunScraper_VendoredCryptoJS and TestRunScraper_VendoredCheerio cover
-// the real-world gap reported against production: roughly half of
-// yoruix/nuvio-providers' scrapers require("crypto-js") and/or
+// the real-world gap reported against production: roughly half of scrapers
+// in a real-world plugin collection require("crypto-js") and/or
 // require("cheerio-without-node-native"), neither of which goja provides,
 // so every such scraper failed with "Invalid module". These exercise the
 // vendored bundles through the actual runScraper path (registry + globals

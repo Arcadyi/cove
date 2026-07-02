@@ -18,11 +18,15 @@ first `make run`. A few things specific to iterating on the code:
   plain browser), but everything else — search, library, settings, addons —
   works against the real Go backend.
 - After changing any Go struct in `internal/tmdb`, `internal/addons`,
-  `internal/player`, `internal/settings`, or `internal/library`, run
-  `make generate` (wraps `tygo generate`) to regenerate the mirrored
-  TypeScript types in `web/src/lib/types/*.ts`. **Never hand-edit those
-  generated files** — they're overwritten on the next `make generate` and the
-  files themselves say so at the top.
+  `internal/player`, `internal/settings`, `internal/library`, or
+  `internal/nuvio`, run `make generate` (wraps `tygo generate`) to regenerate
+  the mirrored TypeScript types in `web/src/lib/types/*.ts`. **Never hand-edit
+  those generated files** — they're overwritten on the next `make generate`
+  and the files themselves say so at the top.
+- `internal/nuvio` embeds pure-Go dependencies (`goja`, `goja_nodejs`,
+  `andybalholm/brotli`) for its sandboxed JS runtime, so the OSS build stays
+  `CGO_ENABLED=0` with no Node/V8 dependency. Keep any new dependency for that
+  package pure Go for the same reason.
 
 ## Working without submodule access
 

@@ -14,9 +14,9 @@ import (
 var githubURLPattern = regexp.MustCompile(`^(?:https?://)?(?:www\.)?github\.com/([^/]+)/([^/]+?)(?:\.git)?(?:/tree/([^/]+))?/?$`)
 
 // rawGithubUsercontentPattern accepts a direct link to a file in a repo on
-// raw.githubusercontent.com — the form community catalogs (e.g.
-// nuvioplugin.com's "copy manifest URL" button) hand users directly, rather
-// than a github.com/owner/repo URL. Matches both the short branch form
+// raw.githubusercontent.com — the form some community plugin directories hand
+// users directly via a "copy manifest URL" button, rather than a
+// github.com/owner/repo URL. Matches both the short branch form
 // (.../owner/repo/main/manifest.json) and the long ref form GitHub also
 // serves (.../owner/repo/refs/heads/main/manifest.json).
 var rawGithubUsercontentPattern = regexp.MustCompile(`^(?:https?://)?raw\.githubusercontent\.com/([^/]+)/([^/]+)/(?:refs/heads/)?([^/]+)/(.+)$`)
@@ -79,8 +79,8 @@ func (m *Manager) resolveBranchAndManifest(owner, name, branch string) (string, 
 // AddRepo fetches and parses a repo's manifest.json and persists it with every
 // scraper Enabled=false — nothing is downloaded or executed until the user
 // opts in per-scraper. Accepts either a github.com/owner/repo URL or a direct
-// raw.githubusercontent.com link to the manifest file itself (the form
-// community catalogs like nuvioplugin.com hand users via a "copy" button).
+// raw.githubusercontent.com link to the manifest file itself (the form some
+// community plugin directories hand users via a "copy" button).
 func (m *Manager) AddRepo(rawURL string) (Repo, error) {
 	var owner, name, resolvedBranch string
 	var data []byte

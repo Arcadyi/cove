@@ -97,6 +97,28 @@ Always compiled identically.
 
 `AddonEntry`: `{id, url, manifest{id, name, description, version, resources, types}, kind("provider"|"subtitle"|"timestamps"), source("official"|"stremio"), enabled}`.
 
+## `internal/nuvio` — community plugin scrapers (`internal/nuvio/nuvio.go`)
+
+Always compiled identically. A separate ecosystem from `internal/addons`: a
+"repo" is a GitHub repository publishing a `manifest.json` that lists
+scraper entries, each a JS file executed in a sandboxed `goja` VM to produce
+direct stream URLs. Off by default — nothing is fetched or executed until
+the user adds a repo and enables an individual scraper. Feeds into
+`GET /api/streams` only (see `internal/player` below); intentionally excluded
+from `internal/tmdb`'s batched `/api/quality/batch`.
+
+| Route | Method | Query | Body | Response |
+|---|---|---|---|---|
+| `/api/nuvio/repos` | GET | — | — | `[]Repo` |
+| `/api/nuvio/repos` | POST | — | `{"url": string}` (a `github.com/owner/repo` URL or a direct raw-manifest link) | `Repo` (newly added, all scrapers disabled) |
+| `/api/nuvio/repos` | PATCH | `id` | `{"enabled": bool}` | `204`; `404` if not found — master on/off switch for the whole repo |
+| `/api/nuvio/repos` | DELETE | `id` | — | `204`; `400` on error |
+| `/api/nuvio/repos/refresh` | POST only | `id` | — | `204`; refetches the manifest and any currently-enabled scrapers' code |
+| `/api/nuvio/scrapers` | PATCH only | `repoId`, `scraperId` | `{"enabled": bool}` | `204`; on first enable, lazily fetches and caches the scraper's JS — refuses to enable on fetch/parse error |
+
+`Repo`: `{id("owner/repo"), owner, repo, branch, url, enabled, scrapers: []Scraper, fetchedAt, fetchErr?}`.
+`Scraper`: `{id, name, description?, version?, filename, supportedTypes?, logo?, contentLanguage?, supportsExternalPlayer?, enabled, code?, codeFetchedAt?, codeErr?}` — `code` is empty until the scraper's first enable.
+
 ## `internal/settings` — preferences (`internal/settings/settings.go`)
 
 Always compiled identically.
@@ -136,8 +158,8 @@ enforces an HTTP method.
 | Route | Query params | Response |
 |---|---|---|
 | `GET /api/subtitles` | `id` (required int), `type` (`tv` requires `season`/`episode` too) | `[]addons.Subtitle{id, url, lang}` (`[]` if none) |
-| `GET /api/streams` | `id` (required int), `type` (default `movie`; `tv` requires `season`/`episode`) | `[]addons.Stream{name, title, url, infoHash, addonName, subtitles}` |
-| `GET /api/play` | `hash` **or** `url` (one required) | `url` → `307` redirect to the origin; `hash` → seekable video stream (`http.ServeContent`, Range-request support) |
+| `GET /api/streams` | `id` (required int), `type` (default `movie`; `tv` requires `season`/`episode`) | `[]addons.Stream{name, title, url, infoHash, addonName, subtitles, headers?}` — includes results from any enabled Nuvio scrapers alongside addon-sourced streams |
+| `GET /api/play` | `hash` **or** `url` (one required) | `url` with no remembered headers → `307` redirect to the origin; `url` for a stream that carries headers (e.g. Referer/Origin some Nuvio-sourced streams require) → proxied instead of redirected, since a redirect can't carry them; `hash` → seekable video stream (`http.ServeContent`, Range-request support) |
 | `GET /api/progress` | `hash` | `{"found": false}` or `{found: true, progress, peers, speed}` — legacy one-shot polling, prefer the SSE stream below |
 | `GET /api/progress/stream` | `hash` | Server-Sent Events, one `data:` line every 2s, same shape as `/api/progress` |
 | `GET /api/speedtest` | — | Streams a fixed 25 MiB zero-byte payload for client-side bandwidth measurement |
